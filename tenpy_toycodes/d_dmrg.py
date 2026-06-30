@@ -179,7 +179,7 @@ class SimpleHeff2(scipy.sparse.linalg.LinearOperator):
                                       np.trace(self.RP, axis1=0, axis2=2))))  # [vR*] wR* [vR]
 
 
-def example_DMRG_tf_ising_finite(L, J, g, chi_max=20):
+def DMRG_tf_ising_finite(L, J, g, chi_max=20):
     from . import a_mps
     from . import b_model
     model = b_model.TFIModel(L=L, J=J, g=g, bc='finite')
@@ -188,14 +188,14 @@ def example_DMRG_tf_ising_finite(L, J, g, chi_max=20):
     else:
         psi = a_mps.init_PM_MPS(L = L)
     eng = SimpleDMRGEngine(psi, model, chi_max=chi_max, eps=1.e-10)
-    for i in range(10):
+    for j in range(10):
         eng.sweep()
         E = np.sum(psi.bond_expectation_value(model.H_bonds))
         
     return E, psi, model
 
 
-def example_DMRG_tf_ising_infinite(g, chi_max=30):
+def DMRG_tf_ising_infinite(g, chi_max=30):
     print("infinite DMRG, transverse field Ising")
     print("g={g:.2f}".format(g=g))
     from . import a_mps

@@ -142,33 +142,36 @@ class SimpleMPS:
         C = np.tensordot(C, B, axes=(1, 0)) # vR* [vR], [vL] j vR
         C = np.tensordot(op_j, C, axes=(1, 1))  # j [j*], vR* [j] vR
         C = np.tensordot(B.conj(), C, axes=([0, 1, 2], [1, 0, 2])) # [vL*] [j*] [vR*], [j] [vR*] [vR]
-        return C
+        return  C
     
     def quantum_Fisher_info(self, op ):
-        """Calculates the QFI for Q = 1/L \sum_i op_i 
+        """Calculates the QFI for Q = 1/L sum_i op_i 
         QFI_Q = 4(< Q^2 > - < Q >^2 )
         """
-        if op @ op != np.eye(2):
+        if (op @ op != np.eye(2)).all():
             raise ValueError("Function only configured for op where op @ op = 1")
         
         expecation_Q = np.mean(self.site_expectation_value(op))
         Q2 = expecation_Q **2
+        expectation_Q2 = 0
 
-        for i
-        theta = self.get_theta1(i) # vL i vR
-        C = np.tensordot(op, theta, axes=(1, 1)) # i [i*], vL [i] vR
-        C = np.tensordot(theta.conj(), C, axes=([0, 1], [1, 0]))  # [vL*] [i*] vR*, [i] [vL] vR
-        for k in range(i + 1, j):
-            k = k % self.L
-            B = self.Bs[k]  # vL k vR
-            C = np.tensordot(C, B, axes=(1, 0)) # vR* [vR], [vL] k vR
-            C = np.tensordot(B.conj(), C, axes=([0, 1], [0, 1])) # [vL*] [k*] vR*, [vR*] [k] vR
-        j = j % self.L
-        B = self.Bs[j]  # vL k vR
-        C = np.tensordot(C, B, axes=(1, 0)) # vR* [vR], [vL] j vR
-        C = np.tensordot(op, C, axes=(1, 1))  # j [j*], vR* [j] vR
-        C = np.tensordot(B.conj(), C, axes=([0, 1, 2], [1, 0, 2])) # [vL*] [j*] [vR*], [j] [vR*] [vR]
-        return C
+        for i in range(self.L):
+            theta = self.get_theta1(i) # vL i vR
+            Ci = np.tensordot(op, theta, axes=(1, 1)) # i [i*], vL [i] vR
+            Ci = np.tensordot(theta.conj(), Ci, axes=([0, 1], [1, 0]))  # [vL*] [i*] vR*, [i] [vL] vR
+            for j in range(i+1, self.L):
+                if j - i > 1:
+                    B = self.Bs[j-1]  # vL k vR
+                    Ci = np.tensordot(Ci, B, axes=(1, 0)) # vR* [vR], [vL] k vR
+                    Ci = np.tensordot(B.conj(), Ci, axes=([0, 1], [0, 1])) # [vL*] [k*] vR*, [vR*] [k] vR
+                    
+                B = self.Bs[j]  # vL k vR
+                C = np.tensordot(Ci, B, axes=(1, 0)) # vR* [vR], [vL] j vR
+                C = np.tensordot(op, C, axes=(1, 1))  # j [j*], vR* [j] vR
+                C = np.tensordot(B.conj(), C, axes=([0, 1, 2], [1, 0, 2])) # [vL*] [j*] [vR*], [j] [vR*] [vR]
+                expectation_Q2 += C
+
+        return 4.0* (1.0/self.L + (2.0 * (1.0 /self.L )**2 ) * np.real(expectation_Q2) - Q2 )
 
 
 def init_FM_MPS(L, d=2, bc='finite'):
