@@ -2,9 +2,10 @@
 # Copyright (C) TeNPy Developers, Apache license
 
 import numpy as np
+from tenpy.networks.mpo import MPO
+from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
 
-
-class TFIModel:
+class TFIModel(CouplingMPOModel, NearestNeighborModel):
     r"""Simple class generating the Hamiltonian of the transverse-field Ising model.
 
     The Hamiltonian reads
@@ -85,3 +86,45 @@ class TFIModel:
             w[1, 2] = -self.J * self.sigmaz
             w_list.append(w)
         self.H_mpo = w_list
+
+
+
+def MPO_Q(L):
+  
+    I = np.eye(2)
+    Z = np.array([[1., 0.],
+                  [0., -1.]])
+
+    W = []
+
+
+    W0 = np.zeros((1, 2, 2, 2), dtype=float)
+
+    W0[0, 0] = I
+    W0[0, 1] = Z / L
+
+    W.append(W0)
+
+    # ---------- bulk ----------
+
+    for _ in range(L - 2):
+
+        Wi = np.zeros((2, 2, 2, 2), dtype=float)
+
+        Wi[0, 0] = I
+        Wi[0, 1] = Z / L
+        Wi[1, 1] = I
+        # Wi[1,0] = 0 automatically
+
+        W.append(Wi)
+
+    # ---------- last site ----------
+
+    WL = np.zeros((2, 1, 2, 2), dtype=float)
+
+    WL[0, 0] = Z / L
+    WL[1, 0] = I
+
+    W.append(WL)
+
+    return W

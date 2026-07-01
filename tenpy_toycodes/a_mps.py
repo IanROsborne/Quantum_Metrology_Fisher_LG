@@ -198,6 +198,17 @@ def init_Neel_MPS(L, d=2, bc='finite'):
     Ss = [S.copy() for i in range(L)]
     return SimpleMPS(Bs, Ss, bc=bc)
 
+def init_PM_MPS(L, bc='finite'):
+    """Return a paramagnetic MPS (= product state with all spins pointing in +x direction)"""
+    d = 2
+    B = np.zeros([1, d, 1], dtype=float)
+    B[0, 0, 0] = 1./np.sqrt(2)
+    B[0, 1, 0] = 1./np.sqrt(2)
+    S = np.ones([1], dtype=float)
+    Bs = [B.copy() for i in range(L)]
+    Ss = [S.copy() for i in range(L)]
+    return SimpleMPS(Bs, Ss, bc=bc)
+
 
 def split_truncate_theta(theta, chi_max, eps):
     """Split and truncate a two-site wave function in mixed canonical form.
@@ -242,13 +253,3 @@ def split_truncate_theta(theta, chi_max, eps):
     B = np.reshape(Z, [chivC, dR, chivR])
     return A, S, B
 
-def init_PM_MPS(L, bc='finite'):
-    """Return a paramagnetic MPS (= product state with all spins pointing in +x direction)"""
-    d = 2
-    B = np.zeros([1, d, 1], dtype=float)
-    B[0, 0, 0] = 1./np.sqrt(2)
-    B[0, 1, 0] = 1./np.sqrt(2)
-    S = np.ones([1], dtype=float)
-    Bs = [B.copy() for i in range(L)]
-    Ss = [S.copy() for i in range(L)]
-    return SimpleMPS(Bs, Ss, bc=bc)

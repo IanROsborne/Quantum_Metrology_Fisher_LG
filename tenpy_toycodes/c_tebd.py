@@ -49,32 +49,19 @@ def update_bond(psi, i, U_bond, chi_max, eps):
     psi.Bs[j] = Bj  # vC j vR
 
 
-def example_TEBD_gs_tf_ising_finite(L, g, chi_max=30):
-    print("finite TEBD, imaginary time evolution, transverse field Ising")
-    print("L={L:d}, g={g:.2f}".format(L=L, g=g))
-    from . import a_mps
+def TEBD_tf_ising_finite(psi,  J, g, chi_max=30, dt = 1.e-4, N_steps = 500):
+    """Calculate evolution of psi using TEBD"""
     from . import b_model
-    model = b_model.TFIModel(L=L, J=1., g=g, bc='finite')
-    psi = a_mps.init_FM_MPS(model.L, model.d, model.bc)
-    for dt in [0.1, 0.01, 0.001, 1.e-4, 1.e-5]:
-        U_bonds = calc_U_bonds(model.H_bonds, dt)
-        run_TEBD(psi, U_bonds, N_steps=500, chi_max=chi_max, eps=1.e-10)
-        E = np.sum(psi.bond_expectation_value(model.H_bonds))
-        print("dt = {dt:.5f}: E = {E:.13f}".format(dt=dt, E=E))
-    print("final bond dimensions: ", psi.get_chi())
-    mag_x = np.sum(psi.site_expectation_value(model.sigmax))
-    mag_z = np.sum(psi.site_expectation_value(model.sigmaz))
-    print("magnetization in X = {mag_x:.5f}".format(mag_x=mag_x))
-    print("magnetization in Z = {mag_z:.5f}".format(mag_z=mag_z))
-    if L < 20:  # compare to exact result
-        from .tfi_exact import finite_gs_energy
-        E_exact = finite_gs_energy(L, 1., g)
-        print("Exact diagonalization: E = {E:.13f}".format(E=E_exact))
-        print("relative error: ", abs((E - E_exact) / E_exact))
-    return E, psi, model
+
+    L = psi.L
+    model = b_model.TFIModel(L=L, J=J, g=g, bc='finite')
+    U_bonds = calc_U_bonds(model.H_bonds, dt)
+    print()
+    run_TEBD(psi, U_bonds, N_steps=N_steps, chi_max=chi_max, eps=1.e-10)
+    return psi
 
 
-def example_TEBD_gs_tf_ising_infinite(g, chi_max=30):
+def TEBD_gs_tf_ising_infinite(g, chi_max=30):
     print("infinite TEBD, imaginary time evolution, transverse field Ising")
     print("g={g:.2f}".format(g=g))
     from . import a_mps
@@ -100,7 +87,7 @@ def example_TEBD_gs_tf_ising_infinite(g, chi_max=30):
     return E, psi, model
 
 
-def example_TEBD_tf_ising_lightcone(L, g, tmax, dt, chi_max=50):
+def TEBD_tf_ising_lightcone(L, g, tmax, dt, chi_max=50):
     print("finite TEBD, real time evolution, transverse field Ising")
     print("L={L:d}, g={g:.2f}, tmax={tmax:.2f}, dt={dt:.3f}".format(L=L, g=g, tmax=tmax, dt=dt))
     # find ground state with TEBD or DMRG
