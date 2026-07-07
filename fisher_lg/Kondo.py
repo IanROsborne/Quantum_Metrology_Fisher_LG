@@ -1,14 +1,11 @@
-import numpy as np
 from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
 from tenpy.models.lattice import Chain
 from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_charges, GroupedSite
-from tenpy.networks.mps import MPS
-from tenpy.algorithms import dmrg, tebd
-from tenpy.networks.mpo import MPO
 
 
 
-class KondoModel(CouplingMPOModel, NearestNeighborModel):
+
+class KondoModel(CouplingMPOModel):
     r"""1D Kondo lattice model with conduction electrons and localized spins.
     
     H = -t \sum_{<ij>\sigma} c^\dagger_{i\sigma} c_{j\sigma} + h.c.
@@ -33,7 +30,7 @@ class KondoModel(CouplingMPOModel, NearestNeighborModel):
     
     def init_terms(self, model_params):
         t = model_params.get('t', 1.0)
-        J1 = model_params.get('J1', 1.0)
+        J1 = model_params.get('J_coup', 1.0)
         J2 = model_params.get('J2', 0.5)
         lat = self.init_lattice(model_params)
         
@@ -56,29 +53,12 @@ class KondoModel(CouplingMPOModel, NearestNeighborModel):
             self.add_coupling(2.0 * J2, u1, 'Spi', u2, 'Smi', dx)
             self.add_coupling(2.0 * J2, u1, 'Smi', u2, 'Spi', dx)
 
-    def build_Q_MPO(self, model_params, Q_op = 'Szi_tot'):
-        """
-        builds an MPO corresponding to Q
-        """
-        L = model_params['L']
-        lat = self.init_lattice(model_params)
 
-        Id = lat.unit_cell[0].get_op("Id")
-        if Q_op == 'Szi_tot':
-            Q = lat.unit_cell[0].get_op("Sigmazi")
-        else:
-            raise ValueError("Must pick a preconfigured operator")
-        
-        W = []
+class KondoChain(KondoModel, NearestNeighborModel):
+    """The :class:`KondoModel` on a Chain, suitable for TEBD.
 
-        for i in range(L):
-            Wi = np.empty((2, 2), dtype=object)
+    See the :class:`KondoModel` for the documentation of parameters.
+    """
 
-            Wi[0, 0] = Id
-            Wi[1, 1] = Id
-
-            Wi[0, 1] = Q / L
-            Wi[1, 0] = None
-
-            W.append(Wi)
-        return MPO.from_grids(lat.mps_sites(), W, IdL=0, IdR=1)
+    default_lattice = Chain
+    force_default_lattice = True
