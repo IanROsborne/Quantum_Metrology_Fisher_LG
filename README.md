@@ -1,13 +1,6 @@
-# Quantum_Metrology_AKLT
-Use Qiskit to simulate the violation of the Legget-Garg inequality on the AKLT ground state.
+# Quantum_Metrology_Fisher_LG
+Recently a paper was submitted to [arXiv](https://arxiv.org/pdf/2604.09772) which demonstrated the relationship between the quantum Fisher information (QFI) -- a key quantity in quantum metrology, quantum information science, entanglement, quantum geometry, linear response and other fields -- and the Legget-Garg bound -- a fundamental theorem on the time evolution of systems similar to the Bell inequality which can distinguish between evolution which is classical (adheres to axioms of macrorealism) and quantum mechanical.
 
-AKLT_defs contains all the functions used to construct the Qiskit circuit which constructs, evolves
-and measures the AKLT ground state and its correlation functions
+This project uses DMRG and simulations of quantum circuits to find a practical application of this relationship for near-term quantum devices.
 
-plot_gen is used to generate plots and simulations
-
-CSHS Tutorial is an IBM Qiskit tutorial which can be used as a reference
-
-Spin-1 LG Calculations is a mathematica notebook which exactly solves the time correlation function
-of a sinlge spin-1 and a spin-1/2 in a magnetic field. In it, one can verify that the spin-1/2 
-violates Legget-Garg but the spin-1 does not.
+This project is a collaboration with Infleqtion and the Bradlyn research group of The Anthony J. Leggett Institute for Condensed Matter Theory at the University of Illinois Urbana-Champaign.

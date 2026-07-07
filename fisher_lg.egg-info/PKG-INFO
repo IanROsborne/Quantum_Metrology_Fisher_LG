@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: fisher_lg
+Version: 0.1.0
+Summary: A small project ehich seeks to explore the practical relationship between the Quantm Fisher information and the Legget-Garg bound
+Author-email: Ian Osborne <ianro2@illinois.edu>
+License-Expression: MIT
+Project-URL: Homepage, https://github.com/IanROsborne/Quantum_Metrology_Fisher_LG
+Project-URL: Issues, https://github.com/IanROsborne/Quantum_Metrology_Fisher_LG/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
+# Quantum_Metrology_Fisher_LG
+Recently a paper was submitted to [arXiv](https://arxiv.org/pdf/2604.09772) which demonstrated the relationship between the quantum Fisher information (QFI) -- a key quantity in quantum metrology, quantum information science, entanglement, quantum geometry, linear response and other fields -- and the Legget-Garg bound -- a fundamental theorem on the time evolution of systems similar to the Bell inequality which can distinguish between evolution which is classical (adheres to axioms of macrorealism) and quantum mechanical.
+
+This project uses DMRG and simulations of quantum circuits to find a practical application of this relationship for near-term quantum devices.
+
+This project is a collaboration with Infleqtion and the Bradlyn research group of The Anthony J. Leggett Institute for Condensed Matter Theory at the University of Illinois Urbana-Champaign.
