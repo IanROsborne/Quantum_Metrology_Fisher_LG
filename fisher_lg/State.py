@@ -5,9 +5,14 @@ from tenpy.models.tf_ising import TFIChain
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Kondo import KondoModel
+from fisher_lg.Kondo import KondoModel, KondoChain
 
 class State_Evo(MPS):
+    '''State_Evo is a class copied from tenpy.networks.mps.MPS which contains functions 
+    useful for calculating the relevant features of the ground sates of quantum chains.
+    '''
+
+    model_dict = {"Ising" : TFIChain, "Kondo" : KondoChain}
 
     def __init__(self,
                  sites,
@@ -33,21 +38,23 @@ class State_Evo(MPS):
         self.model = None
         self.energy = None
         self.params = None
-
+        
     @classmethod
     def from_dmrg(cls, model_params, dmrg_params=None, Q_model = None):
         '''Otputs State class as the ground state of a dmrg'''
+
+        model_type = model_params.get("model_type", None)
+        model_dict = cls.model_dict
+        
         if Q_model is None: 
             if model_params is None:
                 raise ValueError("Provide model_params")
             model_params = dict(model_params)
-            model_type = model_params.get("model_type", "Ising")
-            if model_type == "Ising":
-                model = TFIChain(model_params)
-            elif model_type == "Kondo":
-                model = KondoModel(model_params)
-            else:
-                raise ValueError(f"Unsupported model_type: {model_type}")
+            
+            try:
+                model = model_dict[model_type](model_params)
+            except:
+                raise KeyError(f"Unsupported model_type: {model_type}")
         else: 
             model = Q_model
             model_params = dict(model_params)
@@ -72,7 +79,7 @@ class State_Evo(MPS):
         assert dmrg_params['N_times'] %2 ==0
 
         #run dmrg
-        psi = MPS.from_lat_product_state(model.lat, [['up']])
+        psi = set_initial_state(model_params)
         eng = dmrg.TwoSiteDMRGEngine(psi, model, dmrg_params)
         energy, psi = eng.run()
 
@@ -119,20 +126,21 @@ class State_Evo(MPS):
         """List of model types which have been included manually. 
         from_dmrg has the option of supplying a preconfigured model along with its
         parameters"""
-        return ["Kondo", "Ising"]
+        return self.__class__.model_dict
 
     
     def set_model(self, model_params = None):
         '''sets self.model and self.model_params and self.model_type and returns the dictionary'''
         
+        model_dict = self.available_models
         if model_params is None:
             raise ValueError("Provide model_params")
         model_params = dict(model_params)
         model_type = model_params.get("model_type", "None")
-        if model_type == "Ising":
-            model = TFIChain(model_params)
-        else:
-            raise ValueError(f"Unsupported model_type: {model_type}")
+        try:
+            model = model_dict[model_type](model_params)
+        except:
+            raise KeyError(f"Unsupported model_type: {model_type}")
         
         self.model = model
         self.model_params = model_params
@@ -165,8 +173,14 @@ class State_Evo(MPS):
         else:
             raise ValueError("E0 must be float or None")
         
-        return self.energy
+        return self.energy     
+
+    def get_state_labels(self):     
+        """Returns the state labels of the model corresponding to model_type"""  
         
+        return self.model.init_sites(self.model_params).state_labels    #for fiding the names of the initial states
+            
+
 
     def QFI(self, op, op_sum = True):
         """
@@ -416,3 +430,23 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
     mpo = MPO.from_grids(model.lat.mps_sites(), W, IdL=0, IdR=1 if op_sum else 0)
 
     return mpo
+
+def set_initial_state(model_params):
+        '''Returns an initial state suitable for the given model which is compatible with DMRG'''
+        model_type = model_params.get('model_type', None)
+        model_dict = State_Evo.model_dict
+        
+        if model_type is not None:
+            model = model_dict[model_type](model_params)
+            if model_type == 'Ising':
+                return MPS.from_lat_product_state(model.lat, [['up']])
+            if model_type == "Kondo":
+                initial_state = [] 
+                site_initial =  'up_e down_i'    # electron site, impurity site
+                chain = model.lat.mps_sites()
+                for _ in range(len(chain)):
+                    initial_state.append(site_initial)   
+                return MPS.from_product_state(chain, initial_state)
+                
+        else:
+            raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
