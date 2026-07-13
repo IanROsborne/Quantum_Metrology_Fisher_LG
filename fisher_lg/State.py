@@ -5,7 +5,7 @@ from tenpy.models.tf_ising import TFIChain
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Kondo import KondoModel, KondoChain
+from fisher_lg.Kondo import  KondoChain
 
 class State_Evo(MPS):
     '''State_Evo is a class copied from tenpy.networks.mps.MPS which contains functions 
@@ -38,13 +38,15 @@ class State_Evo(MPS):
         self.model = None
         self.energy = None
         self.params = None
+        self.bc = bc
         
     @classmethod
-    def from_dmrg(cls, model_params, dmrg_params=None, Q_model = None):
+    def from_dmrg(cls, model_params, dmrg_params=None, Q_model = None, initial_state = None):
         '''Otputs State class as the ground state of a dmrg'''
 
         model_type = model_params.get("model_type", None)
         model_dict = cls.model_dict
+        bc = model_params.get("bc", 'finite')
         
         if Q_model is None: 
             if model_params is None:
@@ -79,7 +81,10 @@ class State_Evo(MPS):
         assert dmrg_params['N_times'] %2 ==0
 
         #run dmrg
-        psi_temp = cls.set_initial_state(model_params)
+        if initial_state is None:
+            psi_temp = cls._set_initial_state(model_params)
+        else:
+            psi_temp = initial_state
         eng = dmrg.TwoSiteDMRGEngine(psi_temp, model, dmrg_params)
         energy, psi_temp = eng.run()
 
@@ -98,6 +103,8 @@ class State_Evo(MPS):
         obj.model_params = dict(model_params)
         obj.extra_params = dict(dmrg_params)
         obj.model_type = dict(model_params).get("model_type", None)
+        obj.initial_state = initial_state
+        obj.bc = bc
 
         return obj
     
@@ -118,6 +125,7 @@ class State_Evo(MPS):
         obj.model_params = None
         obj.extra_params = None
         obj.model_type = None
+        
 
         return obj
     
@@ -126,7 +134,7 @@ class State_Evo(MPS):
         '''When conserve is set to Sz it is important to search all possible 
         Sz sectors for the proper ground state. This is implemented here by 
         scanning through the even values of Sz, then searching the neighboring 
-        odd values of the best even Sz. '''
+        odd values of the best even Sz. Currently, it is buggy'''
 
         model_type = model_params["model_type"]
         conserve = model_params.get('conserve'  , None )
@@ -143,7 +151,7 @@ class State_Evo(MPS):
         best_psi = None
         best_Sz = None
 
-        for target_Sz in range(0 , L + 1 , 2):
+        for target_Sz in range(0, L + 1, 2 ):
             
             psi_temp = cls._initial_state_kondo(model, target_Sz)
             eng = dmrg.TwoSiteDMRGEngine( psi_temp, model, dmrg_params )
@@ -156,12 +164,12 @@ class State_Evo(MPS):
                 best_Sz = target_Sz
 
         neighbor_list = []
-        if best_Sz != -L:
+        if best_Sz != 0:
             neighbor_list.append(-1)
         if best_Sz != L:
             neighbor_list.append(1)
             
-        for i in neighbor_list:
+        for i in neighbor_list: #seach the odd  Szs neighboring the best even
             best_Sz_even = best_Sz
             psi_temp = cls._initial_state_kondo(model, best_Sz_even + i)
             eng = dmrg.TwoSiteDMRGEngine( psi_temp, model, dmrg_params )
@@ -169,7 +177,7 @@ class State_Evo(MPS):
             if energy < best_energy:
                 best_energy = energy
                 best_psi =psi_temp.copy()
-                best_Sz =  best_Sz_even + i
+                best_Sz = best_Sz_even + i
 
         obj = cls(
             best_psi.sites,
@@ -197,6 +205,7 @@ class State_Evo(MPS):
         """
         chain = model.lat.mps_sites()
         L = len(chain)
+        bc = model.lat.bc
 
         # reference state has total Sz = 0
         state = ["up_e down_i"] * L
@@ -215,23 +224,24 @@ class State_Evo(MPS):
             for i in range(-target_Sz):
                 state[i] = "down_e down_i"
 
-        return MPS.from_product_state(chain, state)
+        return MPS.from_product_state(chain, state, bc = bc)
     
     @staticmethod
-    def set_initial_state(model_params):
+    def _set_initial_state(model_params):
         '''Returns an initial state suitable for the given model which is compatible with DMRG'''
         model_type = model_params.get('model_type', None)
         model_dict = State_Evo.model_dict
+        bc = model_params.get('bc' , 'finite')
         
         if model_type is not None:
             model = model_dict[model_type](model_params)
             if model_type == 'Ising':
-                return MPS.from_lat_product_state(model.lat, [['up']])
+                return MPS.from_lat_product_state(model.lat, [['up']], bc = bc)
             if model_type == "Kondo":
                 L = model_params['L']
-                state = ["up_e up_i"] * L   # electron site, impurity site
+                state = ["down_e up_i"] * L   # electron site, impurity site
                 chain = model.lat.mps_sites()
-                return MPS.from_product_state(chain, state)
+                return MPS.from_product_state(chain, state, bc = bc)
                 
         else:
             raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
@@ -299,7 +309,7 @@ class State_Evo(MPS):
     def get_opnames(self):     
         """Returns the state labels of the model corresponding to model_type"""  
         
-        return self.model.unit_cell[0].opnames    #for fiding the names of the initial states
+        return self.model.init_sites(self.model_params).opnames  #for fiding the names of the initial states
             
 
 
@@ -455,7 +465,6 @@ class State_Evo(MPS):
         """Calculates the lower bound on the QFI set by the LG correlator QFI > 8 LG_B_Max
         using a "search a little after the first local maximum" algorithm """
 
-        model_params = self.model_params
         extra_params = self.extra_params
         E0 = self.energy
         start_time = extra_params.get('start_time' , 0)
@@ -475,7 +484,7 @@ class State_Evo(MPS):
         t_max = extra_params.get('t_max', 5)
         N_steps = extra_params['N_steps']
         dt = extra_params['dt']
-        step_max = int(t_max/(N_steps * dt))
+        step_max = int(max(t_max/(N_steps * dt),1))
         
         LG_B_vals = []
         best_LG_B = -np.inf
@@ -531,6 +540,7 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
         else: 
             raise ValueError("Model type not configured yet")
     L = model.lat.N_cells
+    bc = model_params.get('bc', 'finite')
     Id = model.lat.unit_cell[0].get_op("Id")
     if op not in model.lat.unit_cell[0].opnames:
         raise ValueError("operator "+ op," is not allowed. Please choose in " + str(model.lat.unit_cell[0].opnames))
@@ -550,7 +560,7 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
     
         W.append(Wi)
 
-    mpo = MPO.from_grids(model.lat.mps_sites(), W, IdL=0, IdR=1 if op_sum else 0)
+    mpo = MPO.from_grids(model.lat.mps_sites(), W, IdL=0, IdR=1 if op_sum else 0, bc = bc)
 
     return mpo
 
