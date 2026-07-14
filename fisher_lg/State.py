@@ -153,7 +153,7 @@ class State_Evo(MPS):
         best_psi = None
         best_Sz = None
 
-        for target_Sz in [-L, 0, L]:
+        for target_Sz in range(0, L + 1, 2):
             
             psi_init = cls._initial_state_kondo(model, target_Sz)
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
@@ -164,7 +164,22 @@ class State_Evo(MPS):
                 best_energy = energy
                 best_psi = psi_temp.copy()
                 best_Sz = target_Sz
+                best_init = psi_init
 
+        neighbor_list = [-1, 1] if best_Sz != L else [-1]
+
+        for i in neighbor_list:
+            psi_init = cls._initial_state_kondo(model, best_Sz + i)
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
+
+            energy, psi_temp = eng.run()
+
+            if energy < best_energy:
+                best_energy = energy
+                best_psi = psi_temp.copy()
+                best_Sz = target_Sz
+                best_init = psi_init.copy()
+            
         obj = cls(
             best_psi.sites,
             [B.copy() for B in best_psi._B],
@@ -181,7 +196,7 @@ class State_Evo(MPS):
         obj.extra_params = dict(dmrg_params)
         obj.model_type = model_type
         obj.best_Sz = best_Sz
-        obj.initial_state = psi_init
+        obj.initial_state = best_init
 
         return obj
     
