@@ -1,11 +1,13 @@
 import numpy as np
 
+import tenpy
 from tenpy.networks.mps import MPS
 from tenpy.models.tf_ising import TFIChain
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Kondo import  KondoChain
+from fisher_lg.Kondo import KondoChain, KondoModel
+
 
 class State_Evo(MPS):
     '''State_Evo is a class copied from tenpy.networks.mps.MPS which contains functions 
@@ -151,10 +153,10 @@ class State_Evo(MPS):
         best_psi = None
         best_Sz = None
 
-        for target_Sz in range(0, L + 1, 2 ):
+        for target_Sz in range(0, L + 1, 2):
             
-            psi_temp = cls._initial_state_kondo(model, target_Sz)
-            eng = dmrg.TwoSiteDMRGEngine( psi_temp, model, dmrg_params )
+            psi_init = cls._initial_state_kondo(model, target_Sz)
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
 
             energy, psi_temp = eng.run()
 
@@ -162,23 +164,22 @@ class State_Evo(MPS):
                 best_energy = energy
                 best_psi = psi_temp.copy()
                 best_Sz = target_Sz
+                best_init = psi_init
 
-        neighbor_list = []
-        if best_Sz != 0:
-            neighbor_list.append(-1)
-        if best_Sz != L:
-            neighbor_list.append(1)
-            
-        for i in neighbor_list: #seach the odd  Szs neighboring the best even
-            best_Sz_even = best_Sz
-            psi_temp = cls._initial_state_kondo(model, best_Sz_even + i)
-            eng = dmrg.TwoSiteDMRGEngine( psi_temp, model, dmrg_params )
+        neighbor_list = [-1, 1] if best_Sz != L else [-1]
+
+        for i in neighbor_list:
+            psi_init = cls._initial_state_kondo(model, best_Sz + i)
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
+
             energy, psi_temp = eng.run()
+
             if energy < best_energy:
                 best_energy = energy
-                best_psi =psi_temp.copy()
-                best_Sz = best_Sz_even + i
-
+                best_psi = psi_temp.copy()
+                best_Sz = target_Sz
+                best_init = psi_init.copy()
+            
         obj = cls(
             best_psi.sites,
             [B.copy() for B in best_psi._B],
@@ -195,8 +196,39 @@ class State_Evo(MPS):
         obj.extra_params = dict(dmrg_params)
         obj.model_type = model_type
         obj.best_Sz = best_Sz
+        obj.initial_state = best_init
 
         return obj
+    
+    def copy(self):
+        """Returns a copy of `self`.
+        """
+        # __init__ makes deep copies of B, S
+        #MPS copy
+        cp = self.__class__(
+            self.sites,
+            self._B,
+            self._S,
+            self.bc,
+            self.form,
+            self.norm,
+            self.unit_cell_width,
+            understood_shift_symmetry=True,
+        )
+        cp.grouped = self.grouped
+        cp._transfermatrix_keep = self._transfermatrix_keep
+        cp.segment_boundaries = getattr(self, 'segment_boundaries', (None, None))
+
+        #State_Evo properties
+        cp.model = self.model
+        cp.model_params = self.model_params
+        cp.extra_params = self.extra_params
+        cp.energy = self.energy
+        cp.model_type = dict(self.model_params).get("model_type", None)
+        cp.initial_state = self.initial_state
+        cp.bc = self.bc
+
+        return cp
     
     @staticmethod
     def _initial_state_kondo(model, target_Sz):
@@ -205,7 +237,6 @@ class State_Evo(MPS):
         """
         chain = model.lat.mps_sites()
         L = len(chain)
-        bc = model.lat.bc
 
         # reference state has total Sz = 0
         state = ["up_e down_i"] * L
@@ -224,7 +255,7 @@ class State_Evo(MPS):
             for i in range(-target_Sz):
                 state[i] = "down_e down_i"
 
-        return MPS.from_product_state(chain, state, bc = bc)
+        return MPS.from_product_state(chain, state)
     
     @staticmethod
     def _set_initial_state(model_params):
@@ -239,7 +270,7 @@ class State_Evo(MPS):
                 return MPS.from_lat_product_state(model.lat, [['up']], bc = bc)
             if model_type == "Kondo":
                 L = model_params['L']
-                state = ["down_e up_i"] * L   # electron site, impurity site
+                state = ["up_e up_i"] * L   # electron site, impurity site
                 chain = model.lat.mps_sites()
                 return MPS.from_product_state(chain, state, bc = bc)
                 
