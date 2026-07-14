@@ -6,7 +6,6 @@ from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_ch
 __all__ = ['KondoModel', 'KondoChain']
 
 
-
 class KondoModel(CouplingMPOModel):
     r"""1D Kondo lattice model with conduction electrons and localized spins.
     
