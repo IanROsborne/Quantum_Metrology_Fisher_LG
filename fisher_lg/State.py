@@ -40,6 +40,7 @@ class State_Evo(MPS):
         self.model = None
         self.energy = None
         self.params = None
+        self.initil_state = None
         self.bc = bc
         
     @classmethod
@@ -164,7 +165,7 @@ class State_Evo(MPS):
                 best_energy = energy
                 best_psi = psi_temp.copy()
                 best_Sz = target_Sz
-                best_init = psi_init
+                best_init = psi_init.copy()
 
         neighbor_list = [-1, 1] if best_Sz != L else [-1]
 
