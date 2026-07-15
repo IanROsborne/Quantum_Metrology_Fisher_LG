@@ -130,7 +130,7 @@ class State_Evo(MPS):
         return obj
     
     @classmethod
-    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None):
+    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None, scan_Sz_with_Spi = False):
         '''When conserve is set to Sz it is important to search all possible 
         Sz sectors for the proper ground state. This is implemented here by 
         scanning through the even values of Sz, then searching the neighboring 
@@ -150,12 +150,19 @@ class State_Evo(MPS):
         best_energy = np.inf
         best_psi = None
         best_Sz = None
+        psi_init = None
 
         for target_Sz in range(0, L + 1, 2):
-            
-            psi_init = cls._initial_state_kondo(model, target_Sz)
-            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
 
+            if (psi_init is None) or (not scan_Sz_with_Spi):   
+                psi_init = cls._initial_state_kondo(model, target_Sz)
+                psi_init.set_extra_params(extra_params = dmrg_params)
+            else:
+                psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
+                psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
+                psi_init.canonical_form()
+        
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
             energy, psi_temp = eng.run()
 
             if energy < best_energy:
@@ -442,11 +449,15 @@ class State_Evo(MPS):
         
     def apply_Q_MPO(self, op, op_sum = True):
         phi = self.copy()
+        L = self.L
         model = self.model
         model_params = self.model_params
         extra_params = self.extra_params
-        mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
-        mpo.apply(phi, options={'compression_method' : 'SVD'})
+        if op_sum:
+            mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
+            mpo.apply(phi, options={'compression_method' : 'SVD'})
+        else:
+            phi.apply_local_op(L//2, op)
 
         phi = State_Evo.from_MPS(phi, model_params)
         phi.set_extra_params(extra_params = extra_params)
@@ -616,6 +627,28 @@ class State_Evo(MPS):
                     else:                       #if nothing beats it then return the last local maximum
                         return best_t, 8 * local_max, qfi
                 i += 1
+
+
+    def find_degeneracy(self, op = None, eps = 1e-9):
+        '''Returns the degeneracy of the model with input model_params. 
+        Also returns a list of the degenerate State_Evo, and the expectation of an operator'''
+
+        extra_params = self.extra_params
+        psi_cp= self.copy()
+        energy = energy1 = self.energy
+        deg_list = []
+        op_expe_list = []
+
+        while np.abs(energy - energy1) < eps:
+            
+            deg_list += [psi_cp]
+            if op is not None:
+                op_expe_list += [round(np.mean(psi_cp.expectation_value(op)), 4)]
+            eng = dmrg.TwoSiteDMRGEngine(self.copy(), self.model, extra_params)
+            eng.init_env(orthogonal_to = deg_list)
+            energy1, psi_cp = eng.run()
+            
+        return len(deg_list), deg_list, op_expe_list
 
         
 

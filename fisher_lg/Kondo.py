@@ -1,6 +1,10 @@
+import numpy as np
+
 from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
 from tenpy.models.lattice import Chain
 from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_charges, GroupedSite
+from tenpy.algorithms import dmrg
+
 
 
 __all__ = ['KondoModel', 'KondoChain']
@@ -63,7 +67,6 @@ class KondoModel(CouplingMPOModel):
                 self.add_onsite(-1.0 * h, u, "Sze")
 
 
-
 class KondoChain(KondoModel, NearestNeighborModel):
     """The :class:`KondoModel` on a Chain, suitable for TEBD.
 
@@ -89,6 +92,10 @@ class AndersonImpurityModel(CouplingMPOModel):
     """1D single-site Anderson impurity model """
 
     couplings = {'t' : 'hopping', 'mu' : 'impurity potential', 'U' : 'impurity Hubbard interaction'}
+
+    def __init__(self, model_params):
+        super().__init__(model_params)
+        self.model_params = model_params
 
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', 'N')
@@ -117,3 +124,4 @@ class AndersonImpurityModel(CouplingMPOModel):
 
         # impurity Hubbard interaction
         self.add_onsite_term(U, imp, 'NuNd')
+
