@@ -15,6 +15,10 @@ class KondoModel(CouplingMPOModel):
     """
     couplings = {'t' : 'hopping', 'J_ii' : 'impurity-impurity Heisenberg coupling', 'J_ei' : 'conduction-impurity Heisenberg coupling'}
 
+    def __init__(self, model_params):
+        super().__init__(model_params)
+        self.model_params = model_params
+
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', None)
         

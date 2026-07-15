@@ -112,7 +112,7 @@ class State_Evo(MPS):
         return obj
     
     @classmethod
-    def from_MPS(cls, psi):
+    def from_MPS(cls, psi, model_params):
         obj = cls(
         psi.sites,
         [B.copy() for B in psi._B],
@@ -123,12 +123,9 @@ class State_Evo(MPS):
         psi.unit_cell_width,
         )
 
-        obj.energy = None
-        obj.model = None
-        obj.model_params = None
+        obj.set_model(model_params = model_params)
         obj.extra_params = None
-        obj.model_type = None
-        
+        obj.initial_state = None
 
         return obj
     
@@ -137,7 +134,7 @@ class State_Evo(MPS):
         '''When conserve is set to Sz it is important to search all possible 
         Sz sectors for the proper ground state. This is implemented here by 
         scanning through the even values of Sz, then searching the neighboring 
-        odd values of the best even Sz. Currently, it is buggy'''
+        odd values of the best even Szy'''
 
         model_type = model_params["model_type"]
         conserve = model_params.get('conserve'  , None )
@@ -201,6 +198,82 @@ class State_Evo(MPS):
 
         return obj
     
+    @classmethod
+    def from_dmrg_search_Sz1(cls, model_params, dmrg_params=None):
+        '''When conserve is set to Sz it is important to search all possible 
+        Sz sectors for the proper ground state. This is implemented here by 
+        scanning through the even values of Sz, then searching the neighboring 
+        odd values of the best even Sz'''
+
+        model_type = model_params["model_type"]
+        conserve = model_params.get('conserve'  , None )
+        
+        if model_type != "Kondo":
+            raise ValueError("Sz search currently implemented only for Kondo.")
+        if conserve is None:
+            raise ValueError("conserve must be not None for specialized sector algorithm")
+        
+        model = cls.model_dict[model_type](dict(model_params))
+        L = len(model.lat.mps_sites())
+
+        best_energy = np.inf
+        best_psi = None
+        best_Sz = None
+        psi_init = None
+
+        for target_Sz in range(0, L + 1, 2):
+            
+            if psi_init is None:   
+                psi_init = cls._initial_state_kondo(model, target_Sz)
+                psi_init.set_extra_params(extra_params = dmrg_params)
+            else:
+                psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
+                psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
+                psi_init.canonical_form()
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
+
+            energy, psi_temp = eng.run()
+
+            if energy < best_energy:
+                best_energy = energy
+                best_psi = psi_temp.copy()
+                best_Sz = target_Sz
+                best_init = psi_init.copy()
+
+        neighbor_list = [-1, 1] if best_Sz != L else [-1]
+
+        for i in neighbor_list:
+            psi_init = cls._initial_state_kondo(model, best_Sz + i)
+            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
+
+            energy, psi_temp = eng.run()
+
+            if energy < best_energy:
+                best_energy = energy
+                best_psi = psi_temp.copy()
+                best_Sz = target_Sz
+                best_init = psi_init.copy()
+            
+        obj = cls(
+            best_psi.sites,
+            [B.copy() for B in best_psi._B],
+            [None if S is None else S.copy() for S in best_psi._S],
+            best_psi.bc,
+            best_psi.form,
+            best_psi.norm,
+            best_psi.unit_cell_width,
+        )
+
+        obj.energy = best_energy
+        obj.model = model
+        obj.model_params = dict(model_params)
+        obj.extra_params = dict(dmrg_params)
+        obj.model_type = model_type
+        obj.best_Sz = best_Sz
+        obj.initial_state = best_init
+
+        return obj
+
     def copy(self):
         """Returns a copy of `self`.
         """
@@ -219,8 +292,8 @@ class State_Evo(MPS):
 
         return cp
     
-    @staticmethod
-    def _initial_state_kondo(model, target_Sz):
+    @classmethod
+    def _initial_state_kondo(cls, model, target_Sz):
         """
         Construct a half-filled product state with total Sz = target_Sz.
         """
@@ -243,8 +316,9 @@ class State_Evo(MPS):
 
             for i in range(-target_Sz):
                 state[i] = "down_e down_i"
-
-        return MPS.from_product_state(chain, state)
+        psi = MPS.from_product_state(chain, state)
+        psi = cls.from_MPS(psi, model.model_params)
+        return psi
     
     @staticmethod
     def _set_initial_state(model_params):
@@ -374,10 +448,9 @@ class State_Evo(MPS):
         mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
         mpo.apply(phi, options={'compression_method' : 'SVD'})
 
-        phi = State_Evo.from_MPS(phi)
-        phi.set_model(model_params = model_params)
+        phi = State_Evo.from_MPS(phi, model_params)
         phi.set_extra_params(extra_params = extra_params)
-        phi.initial_state = self.initial_state
+        
         return  phi
     
 
