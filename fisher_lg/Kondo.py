@@ -84,9 +84,9 @@ class KondoChain(KondoModel, NearestNeighborModel):
         bc = 'periodic' if bc_MPS in ['infinite', 'segment'] else 'open'
 
         site = self.init_sites(model_params= model_params)
-        lattice = Chain(L, site, bc=bc, bc_MPS=bc_MPS)
+        lat = Chain(L, site, bc=bc, bc_MPS=bc_MPS)
         
-        return lattice
+        return lat
 
 class AndersonImpurityModel(CouplingMPOModel):
     """1D single-site Anderson impurity model """
