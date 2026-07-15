@@ -206,19 +206,7 @@ class State_Evo(MPS):
         """
         # __init__ makes deep copies of B, S
         #MPS copy
-        cp = self.__class__(
-            self.sites,
-            self._B,
-            self._S,
-            self.bc,
-            self.form,
-            self.norm,
-            self.unit_cell_width,
-            understood_shift_symmetry=True,
-        )
-        cp.grouped = self.grouped
-        cp._transfermatrix_keep = self._transfermatrix_keep
-        cp.segment_boundaries = getattr(self, 'segment_boundaries', (None, None))
+        cp = super().copy()
 
         #State_Evo properties
         cp.model = self.model
@@ -378,7 +366,6 @@ class State_Evo(MPS):
         return qfi
 
         
-    
     def apply_Q_MPO(self, op, op_sum = True):
         phi = self.copy()
         model = self.model
@@ -390,13 +377,12 @@ class State_Evo(MPS):
         phi = State_Evo.from_MPS(phi)
         phi.set_model(model_params = model_params)
         phi.set_extra_params(extra_params = extra_params)
+        phi.initial_state = self.initial_state
         return  phi
     
 
     def TEBD_initialize(self, model_params = None , dmrg_params = None):
         """Initialize the TEBD engine with appropriate start time"""
-        
-        phi_t = self.copy()
 
         if self.model != None:
             model = self.model 
@@ -410,6 +396,7 @@ class State_Evo(MPS):
         dt = extra_params.get('dt', 0.05)
         start_time = extra_params.get('start_time',0)
 
+        phi_t = self.copy()
         engine = tebd.TEBDEngine(phi_t, model, extra_params)
         engine.evolved_time = 0
 

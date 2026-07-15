@@ -1,7 +1,7 @@
 import sys
 
 class ProgressBar:
-    def __init__(self, min_value=0, max_value=40, length=40, prefix='', suffix=''):
+    def __init__(self, min_value=0, max_value=1, length=40, prefix='', suffix=''):
         self.min_value = min_value
         self.max_value = max_value
         self.length = length
