@@ -13,6 +13,7 @@ class KondoModel(CouplingMPOModel):
          J_1 \sum_{i \sigma\sigma'} c^\dagger_{i\sigma} \vec{S}_{\sigma\sigma'} c_{i\sigma'} \cdot \vec{s}_i
          J_2 \sum_{i} \vec{s}_i \cdot \vec{s}_{i+1}
     """
+    couplings = {'t' : 'hopping', 'J_ii' : 'impurity-impurity Heisenberg coupling', 'J_ei' : 'conduction-impurity Heisenberg coupling'}
 
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', None)
@@ -58,8 +59,6 @@ class KondoModel(CouplingMPOModel):
                 self.add_onsite(-1.0 * h, u, "Sze")
 
 
-        
-
 
 class KondoChain(KondoModel, NearestNeighborModel):
     """The :class:`KondoModel` on a Chain, suitable for TEBD.
@@ -81,3 +80,36 @@ class KondoChain(KondoModel, NearestNeighborModel):
         lattice = Chain(L, site, bc=bc, bc_MPS=bc_MPS)
         
         return lattice
+
+class AndersonImpurityModel(CouplingMPOModel):
+    """1D single-site Anderson impurity model """
+
+    couplings = {'t' : 'hopping', 'mu' : 'impurity potential', 'U' : 'impurity Hubbard interaction'}
+
+    def init_sites(self, model_params):
+        conserve = model_params.get('conserve', 'N')
+        return SpinHalfFermionSite(cons_N=conserve)
+
+    def init_lattice(self, model_params):
+        L = model_params['L']
+        site = self.init_sites(model_params)
+        return Chain(L, site, bc='open')
+
+    def init_terms(self, model_params):
+
+        t = model_params['t']
+        U = model_params['U']
+        mu = model_params['mu']
+
+        L = self.lat.N_sites
+        imp = L // 2
+        print(self.lat.unit_cell[0].opnames)
+        for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
+            self.add_coupling(-1.0 * t, u1, 'Cdu', u2, 'Cu', dx, plus_hc=True)
+            self.add_coupling(-1.0 * t, u1, 'Cdd', u2, 'Cd', dx, plus_hc=True)
+
+        # impurity onsite energy
+        self.add_onsite_term(mu, imp, 'Ntot')
+
+        # impurity Hubbard interaction
+        self.add_onsite_term(U, imp, 'NuNd')
