@@ -17,7 +17,7 @@ class KondoModel(CouplingMPOModel):
          J_1 \sum_{i \sigma\sigma'} c^\dagger_{i\sigma} \vec{S}_{\sigma\sigma'} c_{i\sigma'} \cdot \vec{s}_i
          J_2 \sum_{i} \vec{s}_i \cdot \vec{s}_{i+1}
     """
-    couplings = {'t' : 'hopping', 'J_ii' : 'impurity-impurity Heisenberg coupling', 'J_ei' : 'conduction-impurity Heisenberg coupling'}
+    couplings = {'t' : 'hopping', 'J_ii' : 'impurity-impurity Heisenberg coupling', 'J_ei' : 'conduction-impurity Heisenberg coupling', 'h' : 'symmetry-breaking Zeeman field'}
 
     def __init__(self, model_params):
         super().__init__(model_params)
@@ -88,7 +88,7 @@ class KondoChain(KondoModel, NearestNeighborModel):
         
         return lat
 
-class AndersonImpurityModel(CouplingMPOModel):
+class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     """1D single-site Anderson impurity model """
 
     couplings = {'t' : 'hopping', 'mu' : 'impurity potential', 'U' : 'impurity Hubbard interaction'}
@@ -98,8 +98,8 @@ class AndersonImpurityModel(CouplingMPOModel):
         self.model_params = model_params
 
     def init_sites(self, model_params):
-        conserve = model_params.get('conserve', 'N')
-        return SpinHalfFermionSite(cons_N=conserve)
+        conserve = model_params.get('conserve', None)
+        return SpinHalfFermionSite(cons_N= None , cons_Sz= None)
 
     def init_lattice(self, model_params):
         L = model_params['L']
@@ -111,10 +111,10 @@ class AndersonImpurityModel(CouplingMPOModel):
         t = model_params['t']
         U = model_params['U']
         mu = model_params['mu']
+        h = model_params.get('symmetry_breaking_field', 0)
 
         L = self.lat.N_sites
         imp = L // 2
-        print(self.lat.unit_cell[0].opnames)
         for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
             self.add_coupling(-1.0 * t, u1, 'Cdu', u2, 'Cu', dx, plus_hc=True)
             self.add_coupling(-1.0 * t, u1, 'Cdd', u2, 'Cd', dx, plus_hc=True)
@@ -125,3 +125,8 @@ class AndersonImpurityModel(CouplingMPOModel):
         # impurity Hubbard interaction
         self.add_onsite_term(U, imp, 'NuNd')
 
+        # h: symmetry breaking Zeeman field
+        if h != 0:
+            for u in range(len(self.lat.unit_cell)):
+                # Sz Sz coupling
+                self.add_onsite(-1.0 * h, u, "Sz")

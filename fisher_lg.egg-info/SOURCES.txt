@@ -2,11 +2,10 @@ LICENSE
 README.md
 pyproject.toml
 setup.py
-./fisher_lg/Kondo.py
+./fisher_lg/Models.py
 ./fisher_lg/State.py
 ./fisher_lg/__init__.py
 ./fisher_lg/tools.py
-fisher_lg/Kondo.py
 fisher_lg/State.py
 fisher_lg/__init__.py
 fisher_lg/tools.py

@@ -26,3 +26,9 @@ class ProgressBar:
         if frac >= 1.0:
             sys.stdout.write('\n')
             self.finished = True
+
+
+def scalar_multiply_list(list, x):
+    '''returns a list where every element is multiplied by x.'''
+
+    return [x * i for i in list]
