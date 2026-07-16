@@ -130,7 +130,7 @@ class State_Evo(MPS):
         return obj
     
     @classmethod
-    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None):
+    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None, scan_Sz_with_Spi = False):
         '''When conserve is set to Sz it is important to search all possible 
         Sz sectors for the proper ground state. This is implemented here by 
         scanning through the even values of Sz, then searching the neighboring 
@@ -150,88 +150,21 @@ class State_Evo(MPS):
         best_energy = np.inf
         best_psi = None
         best_Sz = None
-
-        for target_Sz in range(0, L + 1, 2):
-            
-            psi_init = cls._initial_state_kondo(model, target_Sz)
-            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
-
-            energy, psi_temp = eng.run()
-
-            if energy < best_energy:
-                best_energy = energy
-                best_psi = psi_temp.copy()
-                best_Sz = target_Sz
-                best_init = psi_init.copy()
-
-        neighbor_list = [-1, 1] if best_Sz != L else [-1]
-
-        for i in neighbor_list:
-            psi_init = cls._initial_state_kondo(model, best_Sz + i)
-            eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
-
-            energy, psi_temp = eng.run()
-
-            if energy < best_energy:
-                best_energy = energy
-                best_psi = psi_temp.copy()
-                best_Sz = target_Sz
-                best_init = psi_init.copy()
-            
-        obj = cls(
-            best_psi.sites,
-            [B.copy() for B in best_psi._B],
-            [None if S is None else S.copy() for S in best_psi._S],
-            best_psi.bc,
-            best_psi.form,
-            best_psi.norm,
-            best_psi.unit_cell_width,
-        )
-
-        obj.energy = best_energy
-        obj.model = model
-        obj.model_params = dict(model_params)
-        obj.extra_params = dict(dmrg_params)
-        obj.model_type = model_type
-        obj.best_Sz = best_Sz
-        obj.initial_state = best_init
-
-        return obj
-    
-    @classmethod
-    def from_dmrg_search_Sz1(cls, model_params, dmrg_params=None):
-        '''When conserve is set to Sz it is important to search all possible 
-        Sz sectors for the proper ground state. This is implemented here by 
-        scanning through the even values of Sz, then searching the neighboring 
-        odd values of the best even Sz'''
-
-        model_type = model_params["model_type"]
-        conserve = model_params.get('conserve'  , None )
-        
-        if model_type != "Kondo":
-            raise ValueError("Sz search currently implemented only for Kondo.")
-        if conserve is None:
-            raise ValueError("conserve must be not None for specialized sector algorithm")
-        
-        model = cls.model_dict[model_type](dict(model_params))
-        L = len(model.lat.mps_sites())
-
-        best_energy = np.inf
-        best_psi = None
-        best_Sz = None
         psi_init = None
 
         for target_Sz in range(0, L + 1, 2):
-            
-            if psi_init is None:   
+
+            if (psi_init is None) or (not scan_Sz_with_Spi):   
                 psi_init = cls._initial_state_kondo(model, target_Sz)
                 psi_init.set_extra_params(extra_params = dmrg_params)
+        
             else:
                 psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
                 psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
                 psi_init.canonical_form()
+                psi_init.norm = 1
+        
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
-
             energy, psi_temp = eng.run()
 
             if energy < best_energy:
@@ -253,7 +186,8 @@ class State_Evo(MPS):
                 best_psi = psi_temp.copy()
                 best_Sz = target_Sz
                 best_init = psi_init.copy()
-            
+        
+        
         obj = cls(
             best_psi.sites,
             [B.copy() for B in best_psi._B],
@@ -273,6 +207,7 @@ class State_Evo(MPS):
         obj.initial_state = best_init
 
         return obj
+
 
     def copy(self):
         """Returns a copy of `self`.
@@ -442,11 +377,15 @@ class State_Evo(MPS):
         
     def apply_Q_MPO(self, op, op_sum = True):
         phi = self.copy()
+        L = self.L
         model = self.model
         model_params = self.model_params
         extra_params = self.extra_params
-        mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
-        mpo.apply(phi, options={'compression_method' : 'SVD'})
+        if op_sum:
+            mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
+            mpo.apply(phi, options={'compression_method' : 'SVD'})
+        else:
+            phi.apply_local_op(L//2, op)
 
         phi = State_Evo.from_MPS(phi, model_params)
         phi.set_extra_params(extra_params = extra_params)
@@ -494,7 +433,6 @@ class State_Evo(MPS):
             for psi the ground state of model """
         
         extra_params = self.extra_params.copy()
-        model_params = self.model_params.copy()
         E0 = self.energy
         start_time = extra_params.get('start_time',0)
         N_times = extra_params.get('N_times', 10)
@@ -583,7 +521,7 @@ class State_Evo(MPS):
         best_t = 0
         i = 0
         i_max = np.inf
-        max_iter = 3
+        check_after = extra_params.get('check_after', 5)
 
         times = [engine.evolved_time]
         expec_U = [np.real(phi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q(t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
@@ -608,14 +546,37 @@ class State_Evo(MPS):
                         local_max = LG_B_vals[-2]   #LG_B
                         i_max = i                   #index
                         best_t = times[i]           #time
-                        max_iter -= 1               #only let 3 local maximums be found
                         
-                if i_max +5 < i:   #check after 10 steps after the maximum
-                    if best_LG_B > local_max and max_iter != 0:   #if there is a better LG_B then reset
+                if i_max + check_after < i:   #check after 'check_after' steps passed the local maximum
+                    if best_LG_B > local_max:   #if there is a better LG_B then reset
                         i_max = np.inf
                     else:                       #if nothing beats it then return the last local maximum
                         return best_t, 8 * local_max, qfi
                 i += 1
+
+        return best_t, 8 * local_max, qfi
+
+
+    def find_degeneracy(self, op = None, eps = 1e-9):
+        '''Returns the degeneracy of the model with input model_params. 
+        Also returns a list of the degenerate State_Evo, and the expectation of an operator'''
+
+        extra_params = self.extra_params
+        psi_cp= self.copy()
+        energy = energy1 = self.energy
+        deg_list = []
+        op_expe_list = []
+
+        while np.abs(energy - energy1) < eps:
+            
+            deg_list += [psi_cp]
+            if op is not None:
+                op_expe_list += [round(np.mean(psi_cp.expectation_value(op)), 4)]
+            eng = dmrg.TwoSiteDMRGEngine(self.copy(), self.model, extra_params)
+            eng.init_env(orthogonal_to = deg_list)
+            energy1, psi_cp = eng.run()
+            
+        return len(deg_list), deg_list, op_expe_list
 
         
 
