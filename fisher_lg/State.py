@@ -81,7 +81,7 @@ class State_Evo(MPS):
                 'check_after' : 5  #""        ""
             }
 
-        assert dmrg_params['N_times'] %2 ==0
+        assert dmrg_params.get('N_times',2) %2 ==0
 
         #run dmrg
         if initial_state is None:
@@ -272,10 +272,10 @@ class State_Evo(MPS):
                 p_state = []
                 site = model.init_sites(model_params)
                 for i in range(L):
-                    if i == 0:
-                        p_state.append(np.array([1. / np.sqrt(2), 1. / np.sqrt(2), 0., 0.], dtype=complex))
+                    if i == L//2:
+                        p_state.append(np.array([1. / 2, 1. / 2, 1./2, 1./2], dtype=complex))
                     else:
-                        p_state.append(site.state_labels['empty']) 
+                        p_state.append(site.state_labels['up']) 
 
                 return MPS.from_product_state(model.lat.mps_sites(), p_state, bc='finite')
             if model_type == "Kondo":
@@ -353,7 +353,7 @@ class State_Evo(MPS):
             
 
 
-    def QFI(self, op, op_sum = True):
+    def QFI(self, op, op_sum = True, site = None):
         """
         Calculate the Quantum Fisher Information (QFI) for a given state and operator.
         
@@ -367,7 +367,7 @@ class State_Evo(MPS):
         float
             The calculated QFI value.
         """
-        L_half = self.L//2
+        
         if op_sum: 
             # Calculate the expectation value of the operator
             expe = np.mean(self.expectation_value(op))
@@ -377,13 +377,27 @@ class State_Evo(MPS):
             # Calculate the expectation value of the squared operator
             expectation_q2 = np.mean(corr_q2)
         else:
-            expe = self.expectation_value(op)[L_half]
-            expectation_q2 = self.correlation_function(op, op, sites1=[L_half], sites2=[L_half])
+            op_site = self.L//2 if site is None else site
+            expe = self.expectation_value(op)[op_site]
+            expectation_q2 = self.correlation_function(op, op, sites1=[op_site], sites2=[op_site])
         
         # Calculate QFI using the formula: QFI = 4 * (expectation_q2 - expe^2)
         qfi = 4 * (expectation_q2 - expe**2).flatten()[0]
         
         return qfi
+    
+    def spin_spin_correlations(self, sites1 = None, sites2 = None):
+        '''Calculates spin-spin correlation function as an array < \\vec \\sigma_1 . \\vec \\sigma_2 >
+        Parameters:
+        self = State_Evo(MPS) state
+        site1 = array of sites for S_1. If None, site1 = range(0,L)
+        site2 = array of sites for S_2. If None, site2 = range(0,L)
+        '''
+        SxSx = np.array(self.correlation_function(ops1 = 'Sxi', ops2 = 'Sxe', sites1 = sites1, sites2 = sites2)) * 2
+        SySy = np.real(np.array(self.correlation_function(ops1 = 'Syi', ops2 = 'Sye', sites1 = sites1, sites2 = sites2)) )* 2
+        SzSz = np.array(self.correlation_function(ops1 = 'Szi', ops2 = 'Sze', sites1 = sites1, sites2 = sites2)) * 2
+
+        return ( SxSx + SySy + SzSz) 
 
         
     def apply_Q_MPO(self, op, op_sum = True):

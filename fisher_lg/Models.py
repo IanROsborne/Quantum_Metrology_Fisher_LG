@@ -99,7 +99,7 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
 
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', None)
-        return SpinHalfFermionSite(cons_N= None , cons_Sz= None)
+        return SpinHalfFermionSite(cons_N= conserve , cons_Sz= None)
 
     def init_lattice(self, model_params):
         L = model_params['L']
@@ -112,9 +112,10 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         U = model_params['U']
         mu = model_params['mu']
         h = model_params.get('symmetry_breaking_field', 0)
+        imp_loc = model_params.get('imp', 'bulk')
 
         L = self.lat.N_sites
-        imp = L // 2
+        imp = L // 2 if 'imp_log' == 'bulk' else 0
         for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
             self.add_coupling(-1.0 * t, u1, 'Cdu', u2, 'Cu', dx, plus_hc=True)
             self.add_coupling(-1.0 * t, u1, 'Cdd', u2, 'Cd', dx, plus_hc=True)
