@@ -1,12 +1,10 @@
 import numpy as np
 
-import tenpy
 from tenpy.networks.mps import MPS
-from tenpy.models.tf_ising import TFIChain
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Models import KondoChain, KondoModel, AndersonImpurityModel
+from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain, AndersonImpurityModel_Lanczos
 
 
 class State_Evo(MPS):
@@ -14,7 +12,11 @@ class State_Evo(MPS):
     useful for calculating the relevant features of the ground sates of quantum chains.
     '''
 
-    model_dict = {"Ising" : TFIChain, "Kondo" : KondoChain, "AIM" : AndersonImpurityModel}
+    model_dict = {
+        "Ising" : TFIsingChain, 
+        "Kondo" : KondoChain, 
+        "AIM" : AndersonImpurityModel, 
+        "AIM_L" : AndersonImpurityModel_Lanczos}
 
     def __init__(self,
                  sites,
@@ -78,7 +80,7 @@ class State_Evo(MPS):
                 'order': 2,
                 'start_time' : 0  ,
                 't_max' : 3,  #only an option for calculating the maximum of the LG correlator
-                'check_after' : 5  #""        ""
+                'check_after' : 5
             }
 
         assert dmrg_params.get('N_times',2) %2 ==0
@@ -88,6 +90,7 @@ class State_Evo(MPS):
             psi_temp = cls._set_initial_state(model_params)
         else:
             psi_temp = initial_state
+        #print(psi_temp.EffectiveH.length)
         eng = dmrg.TwoSiteDMRGEngine(psi_temp, model, dmrg_params)
         energy, psi_temp = eng.run()
 
@@ -268,20 +271,30 @@ class State_Evo(MPS):
             model = model_dict[model_type](model_params)
             if model_type in ['Ising']:
                 return MPS.from_lat_product_state(model.lat, [['up']], bc = bc)
-            if model_type == "AIM":
+            if model_type == "AIM_L":
                 p_state = []
                 site = model.init_sites(model_params)
-                for i in range(L):
+                for i in range(L+1):
                     if i == L//2:
-                        p_state.append(np.array([1. / 2, 1. / 2, 1./2, 1./2], dtype=complex))
+                        p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
                     else:
                         p_state.append(site.state_labels['up']) 
-
                 return MPS.from_product_state(model.lat.mps_sites(), p_state, bc='finite')
             if model_type == "Kondo":
                 state = ["up_e up_i"] * L   # electron site, impurity site
                 chain = model.lat.mps_sites()
                 return MPS.from_product_state(chain, state, bc = bc)
+            if model_type == "AIM":
+                p_state = []
+                site = model.init_sites(model_params)
+                L = len(model.lat.mps_sites())
+                for i in range(L):
+                    if i==0:
+                        p_state.append(np.array([1] * 16, dtype=complex)/4)
+                    else:
+                        p_state.append(site.state_labels['up_l down_r']) 
+                return MPS.from_product_state(model.lat.mps_sites(), p_state, bc='finite')
+
                 
         else:
             raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')

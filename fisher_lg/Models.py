@@ -84,7 +84,6 @@ class KondoChain(KondoModel, NearestNeighborModel):
     def init_lattice(self, model_params):
         """Initialize a 1D lattice"""
         L = model_params['L']
-        conserve = model_params.get('conserve', 'best')
         bc_MPS = model_params.get('bc', 'finite')
         bc = 'periodic' if bc_MPS in ['infinite', 'segment'] else 'open'
 
@@ -139,15 +138,21 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
         V = model_params['V']
         h = model_params.get('h', 0)
         L = model_params['L']
-        imp = L+1     #location of impurity in Lanczos chain
+        imp = L     #location of impurity in Lanczos chain is the L+1 element
 
-        t = [t] * L if type(t) == int else t * (L / len(t))
+        if type(t) in [float , int]:
+            t = [t] * L  
+        else:
+            t = float(t) * (L / len(t))
         # Lanczos bath off-diagonal terms
         for i in range(L):
             self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdu', 'Cu', plus_hc= True)
             self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdd', 'Cd', plus_hc= True)
 
-        eps_k = [eps_k] * L if type(t) == int else eps_k * (L / len(eps_k))
+        if type(eps_k) in [float , int]:
+            eps_k = [eps_k] * L
+        else:
+            eps_k = float(eps_k) * (L / len(eps_k))
         # Lanczos bath diagonal terms
         for i in range(L):
             self.add_onsite_term(-1.0 * eps_k[i], i, 'Ntot')
@@ -159,8 +164,8 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
         self.add_onsite_term(U, imp, 'NuNd')
 
         # exchange coupling bath-impurity
-        self.add_coupling_term(V , L, imp, 'Cdu', 'Cu', plus_hc= True)
-        self.add_coupling_term(V , L, imp, 'Cdd', 'Cd', plus_hc= True)
+        self.add_coupling_term(V , imp-1, imp, 'Cdu', 'Cu', plus_hc= True)
+        self.add_coupling_term(V , imp-1, imp, 'Cdd', 'Cd', plus_hc= True)
 
         # h: symmetry breaking Zeeman field
         if h != 0:
@@ -187,10 +192,11 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     """
 
     couplings = {'t': 'hopping',   #bath site hopping
-                'mu': 'impurity potential',    #on-site impurity potential
+                'mu_d': 'impurity potential',    #on-site impurity potential
                 'U' : 'impurity Hubbard interaction',   #impurity Hubbard    
                 'V' : 'exchange coupling',      #impurity-bath hopping
-                'h' : 'Zeeman coupling'}  #breaks the SU(2) spin symmetry      
+                'h' : 'Zeeman coupling',  #breaks the SU(2) spin symmetry     
+                'mu': 'bath chemical potential'}   #chemical potential for conduction band 
 
     def __init__(self, model_params):
         super().__init__(model_params)
@@ -199,10 +205,12 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', None)
         #Unit cell must be doubled in order to accomadate the impurity site at L//2
-        ferm_site = SpinHalfFermionSite(cons_N='N', cons_Sz= conserve )
-        set_common_charges([ferm_site, ferm_site], new_charges='same')
+        ferm_site1 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= None )
+        ferm_site2 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= None )
+        set_common_charges([ferm_site1, ferm_site2], new_charges='same')
         
-        site = GroupedSite([ferm_site, ferm_site], labels = ['l', 'r'] , charges = 'same')
+        #left and right sites are labeled with 'l' 'r'
+        site = GroupedSite([ferm_site1, ferm_site2], labels = ['l', 'r'] , charges = 'same') 
         return site
 
     def init_lattice(self, model_params):
@@ -213,36 +221,43 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     def init_terms(self, model_params):
         
         #see AndersonImpurityModel.couplings
-        t = model_params['t']
-        U = model_params['U']
-        L = self.lat.N_sites
-        mu = model_params['mu']
-        V = model_params['V']
-        h = model_params.get('h', 0)
-        imp = [L//2, 'l']     #location of impurity in Lanczos chain
+        try:
+            t = model_params['t']
+            U = model_params['U']
+            L = self.lat.N_sites
+            mu_d = model_params['mu_d']
+            mu = model_params.get('mu', 0)
+            V = model_params['V']
+            h = model_params.get('h', 0)
+        except:
+            KeyError("Please make sure model_params contains values for (t, U, mu_d, V)")
+        imp = L//2     #location of impurity in lattice. impurity is on left side
 
         # conduction electron hopping
-        self.add_coupling(-1.0 * t, 1, 'Cdur', 0, 'Cul', 1, plus_hc= True)
-        self.add_coupling(-1.0 * t, 1, 'Cddr', 0, 'Cdl', 1, plus_hc= True)
+        self.add_coupling(-1.0 * t, 0, 'Cdur', 0, 'Cul', 1, plus_hc= True)
+        self.add_coupling(-1.0 * t, 0, 'Cddr', 0, 'Cdl', 1, plus_hc= True)
         for u in range(len(self.lat.unit_cell)):
             self.add_onsite(-1.0 * t, u, 'Cdul Cur', plus_hc= True)
             self.add_onsite(-1.0 * t, u, 'Cddl Cdr', plus_hc= True)
         # bath electrons hop passed the impurity
-        self.add_coupling_term(-1.0 * t, imp[0]-1, imp[0] , 'Cdur', 'Cur' , plus_hc= True )
-        self.add_coupling_term(-1.0 * t, imp[0]-1, imp[0] , 'Cddr', 'Cdr' , plus_hc= True )
+        self.add_coupling_term(-1.0 * t, imp-1, imp , 'Cdur', 'Cur' , plus_hc= True )
+        self.add_coupling_term(-1.0 * t, imp-1, imp , 'Cddr', 'Cdr' , plus_hc= True )
 
         # impurity onsite energy
-        self.add_onsite_term(mu, imp[0], 'Ntot' + imp[1])
+        self.add_onsite_term(mu_d- mu, imp, 'Ntotl')
 
         # impurity Hubbard interaction
-        self.add_onsite_term(U, imp[0], 'NuNd' + imp[1])
+        self.add_onsite_term(U, imp, 'NuNdl')
+
+        # conduction chemical potential
+        self.add_onsite(mu, 0, 'Ntotl')
+        self.add_onsite(mu, 0, 'Ntotr')
 
         # exchange coupling bath-impurity
-        for u in range(len(self.lat.unit_cell)):
-            self.add_coupling_term(V + t , u, 'Cdul Cur', plus_hc= True)
-            self.add_coupling_term(V + t , u, 'Cddl Cdr', plus_hc= True)
-        self.add_coupling_term(V + t , imp[0], imp[0]-1, 'Cdul', 'Cur', plus_hc= True)
-        self.add_coupling_term(V + t , imp[0], imp[0]-1, 'Cddl', 'Cdr', plus_hc= True)
+        self.add_onsite_term(V + t , imp, 'Cdul Cur', plus_hc= True)
+        self.add_onsite_term(V + t , imp, 'Cddl Cdr', plus_hc= True)
+        self.add_coupling_term(V + t , imp-1, imp, 'Cur', 'Cdul',  plus_hc= True)
+        self.add_coupling_term(V + t , imp-1, imp, 'Cdr', 'Cddl',  plus_hc= True)
 
         # h: symmetry breaking Zeeman field
         if h != 0:
@@ -250,6 +265,12 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
                 # Sz Sz coupling
                 self.add_onsite(-1.0 * h, u, "Szl")
                 self.add_onsite(-1.0 * h, u, "Szr")
+
+    def impurity_site(self):
+        '''Returns the integer index of the impurity site'''
+
+        L = self.lat.N_sites
+        return L//2
 
 class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
     r"""1D single-site Transferse Field Ising Chain 
@@ -288,7 +309,7 @@ class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
 
         # Ising interaction
         for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
-            self.add_coupling( J, u1, 'Sigamz', u2, 'Sigmaz', dx)
+            self.add_coupling( J, u1, 'Sigmaz', u2, 'Sigmaz', dx)
 
         # transvere field
         self.add_onsite(-1.0 * h, 0, 'Sigmax')
