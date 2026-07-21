@@ -26,3 +26,5 @@ class ProgressBar:
         if frac >= 1.0:
             sys.stdout.write('\n')
             self.finished = True
+
+
