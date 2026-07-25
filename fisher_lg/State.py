@@ -169,6 +169,7 @@ class State_Evo(MPS):
         
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
             energy, psi_temp = eng.run()
+            print('sz', target_Sz, 'energy', energy)
 
             if energy < best_energy:
                 best_energy = energy
@@ -177,17 +178,19 @@ class State_Evo(MPS):
                 best_init = psi_init.copy()
 
         neighbor_list = [-1, 1] if best_Sz != L else [-1]
+        best_Sz_temp = best_Sz
 
         for i in neighbor_list:
-            psi_init = cls._initial_state_kondo(model, best_Sz + i)
+            psi_init = cls._initial_state_kondo(model, best_Sz_temp + i)
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
 
             energy, psi_temp = eng.run()
+            print('sz', best_Sz_temp + i, 'energy', energy)
 
             if energy < best_energy:
                 best_energy = energy
                 best_psi = psi_temp.copy()
-                best_Sz = target_Sz
+                best_Sz = best_Sz_temp + i
                 best_init = psi_init.copy()
         
         
@@ -240,10 +243,9 @@ class State_Evo(MPS):
 
         # reference state has total Sz = 0
         state = ["up_e down_i"] * L
-
         if target_Sz > 0:
             if target_Sz > L:
-                raise ValueError("Requested Sz sector impossible.")
+                raise ValueError("Requested Sz = " + str(target_Sz) +" sector impossible.")
 
             for i in range(target_Sz):
                 state[i] = "up_e up_i"
