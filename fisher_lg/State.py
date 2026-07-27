@@ -158,7 +158,7 @@ class State_Evo(MPS):
         for target_Sz in range(0, L + 1, 2):
 
             if (psi_init is None) or (not scan_Sz_with_Spi):   
-                psi_init = cls._initial_state_kondo(model, target_Sz)
+                psi_init = model._initial_state_kondo( target_Sz)
                 psi_init.set_extra_params(extra_params = dmrg_params)
         
             else:
@@ -169,7 +169,6 @@ class State_Evo(MPS):
         
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
             energy, psi_temp = eng.run()
-            print('sz', target_Sz, 'energy', energy)
 
             if energy < best_energy:
                 best_energy = energy
@@ -181,11 +180,10 @@ class State_Evo(MPS):
         best_Sz_temp = best_Sz
 
         for i in neighbor_list:
-            psi_init = cls._initial_state_kondo(model, best_Sz_temp + i)
+            psi_init = model._initial_state_kondo(target_Sz = best_Sz_temp + i)
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
 
             energy, psi_temp = eng.run()
-            print('sz', best_Sz_temp + i, 'energy', energy)
 
             if energy < best_energy:
                 best_energy = energy
@@ -234,12 +232,14 @@ class State_Evo(MPS):
         return cp
     
     @classmethod
-    def _initial_state_kondo(cls, model, target_Sz):
+    def _initial_state_kondo(cls, model, target_Sz = None):
         """
         Construct a half-filled product state with total Sz = target_Sz.
         """
         chain = model.lat.mps_sites()
         L = len(chain)
+        if target_Sz is None:
+            target_Sz = L
 
         # reference state has total Sz = 0
         state = ["up_e down_i"] * L
@@ -453,8 +453,8 @@ class State_Evo(MPS):
         engine.evolved_time = 0
 
         if start_time > 0 and start_time < dt:
-            engine.calc_U(2, start_time)
-            engine.evolve( 1,   dt = start_time)
+            engine.calc_U(order = 2, delta_t = start_time)
+            engine.evolve( N_steps = 1,  dt = start_time)
             engine.evolved_time = round(engine.evolved_time, 4)
         elif start_time >0:
             initial_steps = round(start_time / dt, 1)

@@ -3,6 +3,7 @@ import numpy as np
 from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
 from tenpy.models.lattice import Chain
 from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_charges, GroupedSite
+from tenpy.networks.mps import MPS
 
 
 __all__ = ['KondoModel', 'KondoChain', 'AndersonImpurityModel_Lanczos', 'AndersonImpurityModel', 'TFIsingChain']
@@ -92,6 +93,35 @@ class KondoChain(KondoModel, NearestNeighborModel):
         
         return lat
 
+    def _initial_state_kondo(self, target_Sz = None):
+            """
+            Construct a half-filled product state with total Sz = target_Sz.
+            """
+            chain = self.lat.mps_sites()
+            L = len(chain)
+            if target_Sz is None:
+                target_Sz = L
+    
+            # reference state has total Sz = 0
+            state = ["up_e down_i"] * L
+            if target_Sz > 0:
+                if target_Sz > L:
+                    raise ValueError("Requested Sz = " + str(target_Sz) +" sector impossible.")
+    
+                for i in range(target_Sz):
+                    state[i] = "up_e up_i"
+    
+            elif target_Sz < 0:
+                if -target_Sz > L:
+                    raise ValueError("Requested Sz sector impossible.")
+    
+                for i in range(-target_Sz):
+                    state[i] = "down_e down_i"
+            psi = MPS.from_product_state(chain, state)
+            return psi
+
+    
+
 class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
     r"""Lanczos decomposed 1D single-site Anderson impurity model 
     
@@ -174,6 +204,46 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
                 self.add_onsite(-1.0 * h, u, "Sz")
 
 
+    def _set_initial_state(self, model_params):
+                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
+        
+
+                bc = model_params.get('bc' , 'finite')
+                L = model_params['L']
+                
+                if model_type is not None:
+                    if model_type in ['Ising']:
+                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
+                    if model_type == "AIM_L":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        for i in range(L+1):
+                            if i == L//2:
+                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
+                            else:
+                                p_state.append(site.state_labels['up']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+                    if model_type == "Kondo":
+                        state = ["up_e up_i"] * L   # electron site, impurity site
+                        chain = self.lat.mps_sites()
+                        return MPS.from_product_state(chain, state, bc = bc)
+                    if model_type == "AIM":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        L = len(self.lat.mps_sites())
+                        for i in range(L):
+                            if i==0:
+                                p_state.append(np.array([1] * 16, dtype=complex)/4)
+                            else:
+                                p_state.append(site.state_labels['up_l down_r']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+        
+                        
+                else:
+                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
+    
+
+
 class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     r"""1D single-site Anderson impurity model 
     
@@ -204,9 +274,10 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
 
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', None)
+        cons_Sz = model_params.get('cons_Sz', None)
         #Unit cell must be doubled in order to accomadate the impurity site at L//2
-        ferm_site1 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= None )
-        ferm_site2 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= None )
+        ferm_site1 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= cons_Sz )
+        ferm_site2 = SpinHalfFermionSite(cons_N= conserve, cons_Sz= cons_Sz )
         set_common_charges([ferm_site1, ferm_site2], new_charges='same')
         
         #left and right sites are labeled with 'l' 'r'
@@ -230,34 +301,37 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
             V = model_params['V']
             h = model_params.get('h', 0)
         except:
-            KeyError("Please make sure model_params contains values for (t, U, mu_d, V)")
-        imp = L//2     #location of impurity in lattice. impurity is on left side
+            KeyError("Make sure model_params contains values for (t, U, mu_d, V)")
+        imp = L // 2    #location of impurity in lattice. impurity is on left side
 
         # conduction electron hopping
-        self.add_coupling(-1.0 * t, 0, 'Cdur', 0, 'Cul', 1, plus_hc= True)
-        self.add_coupling(-1.0 * t, 0, 'Cddr', 0, 'Cdl', 1, plus_hc= True)
-        for u in range(len(self.lat.unit_cell)):
-            self.add_onsite(-1.0 * t, u, 'Cdul Cur', plus_hc= True)
-            self.add_onsite(-1.0 * t, u, 'Cddl Cdr', plus_hc= True)
-        # bath electrons hop passed the impurity
-        self.add_coupling_term(-1.0 * t, imp-1, imp , 'Cdur', 'Cur' , plus_hc= True )
-        self.add_coupling_term(-1.0 * t, imp-1, imp , 'Cddr', 'Cdr' , plus_hc= True )
+        for op_r, op_l in [['Cdur', 'Cul'], ['Cddr', 'Cdl']]:
+            for i in range(L-1):
+                if i+1 != imp:
+                    self.add_coupling_term(-1.0 * t, i, i + 1, op_r, op_l, plus_hc= True)
+                else:
+                    self.add_coupling_term(-1.0 * V, i, i + 1, op_r, op_l, plus_hc= True)
+                
+        for i in range(L):
+            if i != imp:
+                self.add_onsite_term(-1.0 * t, i, 'Cdul Cur', plus_hc= True)
+                self.add_onsite_term(-1.0 * t, i, 'Cddl Cdr', plus_hc= True)
+            else:
+                # bath electrons hop passed the impurity
+                self.add_coupling_term(-1.0 * t, i-1, i , 'Cdur', 'Cur' , plus_hc= True )
+                self.add_coupling_term(-1.0 * t, i-1, i , 'Cddr', 'Cdr' , plus_hc= True)
 
-        # impurity onsite energy
-        self.add_onsite_term(mu_d- mu, imp, 'Ntotl')
+        # impurity/conduction onsite energy
+        for i in range(L):
+            if i == imp:
+                self.add_onsite_term(mu_d, i, 'Ntotl')
+                self.add_onsite_term(mu, i, 'Ntotr')
+            else:
+                self.add_onsite_term(mu, i, 'Ntotl')
+                self.add_onsite_term(mu, i, 'Ntotr')
 
         # impurity Hubbard interaction
         self.add_onsite_term(U, imp, 'NuNdl')
-
-        # conduction chemical potential
-        self.add_onsite(mu, 0, 'Ntotl')
-        self.add_onsite(mu, 0, 'Ntotr')
-
-        # exchange coupling bath-impurity
-        self.add_onsite_term(V + t , imp, 'Cdul Cur', plus_hc= True)
-        self.add_onsite_term(V + t , imp, 'Cddl Cdr', plus_hc= True)
-        self.add_coupling_term(V + t , imp-1, imp, 'Cur', 'Cdul',  plus_hc= True)
-        self.add_coupling_term(V + t , imp-1, imp, 'Cdr', 'Cddl',  plus_hc= True)
 
         # h: symmetry breaking Zeeman field
         if h != 0:
@@ -271,6 +345,47 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
 
         L = self.lat.N_sites
         return L//2
+
+    def _set_initial_state(self, model_params):
+                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
+        
+    
+                bc = model_params.get('bc' , 'finite')
+                L = model_params['L']
+                
+                if model_type is not None:
+                    if model_type in ['Ising']:
+                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
+                    if model_type == "AIM_L":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        for i in range(L+1):
+                            if i == L//2:
+                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
+                            else:
+                                p_state.append(site.state_labels['up']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+                    if model_type == "Kondo":
+                        state = ["up_e up_i"] * L   # electron site, impurity site
+                        chain = self.lat.mps_sites()
+                        return MPS.from_product_state(chain, state, bc = bc)
+                    if model_type == "AIM":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        L = len(self.lat.mps_sites())
+                        for i in range(L):
+                            if i==0:
+                                p_state.append(np.array([1] * 16, dtype=complex)/4)
+                            else:
+                                p_state.append(site.state_labels['up_l down_r']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+        
+                        
+                else:
+                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
+        
+
+
 
 class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
     r"""1D single-site Transferse Field Ising Chain 
@@ -316,3 +431,42 @@ class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
 
         # longitudinal - z field
         self.add_onsite(-1.0 * hz, 0, 'Sigmaz')
+
+    def _set_initial_state(self, model_params):
+                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
+        
+    
+                bc = model_params.get('bc' , 'finite')
+                L = model_params['L']
+                
+                if model_type is not None:
+                    if model_type in ['Ising']:
+                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
+                    if model_type == "AIM_L":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        for i in range(L+1):
+                            if i == L//2:
+                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
+                            else:
+                                p_state.append(site.state_labels['up']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+                    if model_type == "Kondo":
+                        state = ["up_e up_i"] * L   # electron site, impurity site
+                        chain = self.lat.mps_sites()
+                        return MPS.from_product_state(chain, state, bc = bc)
+                    if model_type == "AIM":
+                        p_state = []
+                        site = self.init_sites(model_params)
+                        L = len(self.lat.mps_sites())
+                        for i in range(L):
+                            if i==0:
+                                p_state.append(np.array([1] * 16, dtype=complex)/4)
+                            else:
+                                p_state.append(site.state_labels['up_l down_r']) 
+                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+        
+                        
+                else:
+                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
+        
