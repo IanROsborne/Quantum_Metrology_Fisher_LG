@@ -87,10 +87,10 @@ class State_Evo(MPS):
 
         #run dmrg
         if initial_state is None:
-            psi_temp = cls._set_initial_state(model_params)
+            psi_temp = model._set_initial_state(target_Sz = model_params.get('target_Sz', None))
         else:
             psi_temp = initial_state
-        #print(psi_temp.EffectiveH.length)
+
         eng = dmrg.TwoSiteDMRGEngine(psi_temp, model, dmrg_params)
         energy, psi_temp = eng.run()
 
@@ -133,7 +133,7 @@ class State_Evo(MPS):
         return obj
     
     @classmethod
-    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None, scan_Sz_with_Spi = False):
+    def from_dmrg_search_Sz(cls, model_params, dmrg_params=None, scan_Sz_with_Sp = False):
         '''When conserve is set to Sz it is important to search all possible 
         Sz sectors for the proper ground state. This is implemented here by 
         scanning through the even values of Sz, then searching the neighboring 
@@ -157,9 +157,9 @@ class State_Evo(MPS):
 
         for target_Sz in range(0, L + 1, 2):
 
-            if (psi_init is None) or (not scan_Sz_with_Spi):   
-                psi_init = model._initial_state_kondo( target_Sz)
-                psi_init.set_extra_params(extra_params = dmrg_params)
+            if (psi_init is None) or (not scan_Sz_with_Sp):   
+                psi_init = model._set_initial_state( target_Sz)
+                #psi_init.set_extra_params(extra_params = dmrg_params)
         
             else:
                 psi_init = psi_init.apply_Q_MPO('Spi', op_sum = True)
@@ -174,13 +174,13 @@ class State_Evo(MPS):
                 best_energy = energy
                 best_psi = psi_temp.copy()
                 best_Sz = target_Sz
-                best_init = psi_init.copy()
+                best_init = State_Evo.from_MPS(psi_init)
 
         neighbor_list = [-1, 1] if best_Sz != L else [-1]
         best_Sz_temp = best_Sz
 
         for i in neighbor_list:
-            psi_init = model._initial_state_kondo(target_Sz = best_Sz_temp + i)
+            psi_init = model._set_initial_state(target_Sz = best_Sz_temp + i)
             eng = dmrg.TwoSiteDMRGEngine( psi_init, model, dmrg_params )
 
             energy, psi_temp = eng.run()
@@ -189,7 +189,7 @@ class State_Evo(MPS):
                 best_energy = energy
                 best_psi = psi_temp.copy()
                 best_Sz = best_Sz_temp + i
-                best_init = psi_init.copy()
+                best_init = State_Evo.from_MPS(psi_init)
         
         
         obj = cls(
@@ -230,77 +230,6 @@ class State_Evo(MPS):
         cp.bc = self.bc
 
         return cp
-    
-    @classmethod
-    def _initial_state_kondo(cls, model, target_Sz = None):
-        """
-        Construct a half-filled product state with total Sz = target_Sz.
-        """
-        chain = model.lat.mps_sites()
-        L = len(chain)
-        if target_Sz is None:
-            target_Sz = L
-
-        # reference state has total Sz = 0
-        state = ["up_e down_i"] * L
-        if target_Sz > 0:
-            if target_Sz > L:
-                raise ValueError("Requested Sz = " + str(target_Sz) +" sector impossible.")
-
-            for i in range(target_Sz):
-                state[i] = "up_e up_i"
-
-        elif target_Sz < 0:
-            if -target_Sz > L:
-                raise ValueError("Requested Sz sector impossible.")
-
-            for i in range(-target_Sz):
-                state[i] = "down_e down_i"
-        psi = MPS.from_product_state(chain, state)
-        psi = cls.from_MPS(psi, model.model_params)
-        return psi
-    
-    @staticmethod
-    def _set_initial_state(model_params):
-        '''Returns an initial state suitable for the given model which is compatible with DMRG'''
-
-        model_type = model_params.get('model_type', None)
-        model_dict = State_Evo.model_dict
-        bc = model_params.get('bc' , 'finite')
-        L = model_params['L']
-        
-        if model_type is not None:
-            model = model_dict[model_type](model_params)
-            if model_type in ['Ising']:
-                return MPS.from_lat_product_state(model.lat, [['up']], bc = bc)
-            if model_type == "AIM_L":
-                p_state = []
-                site = model.init_sites(model_params)
-                for i in range(L+1):
-                    if i == L//2:
-                        p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
-                    else:
-                        p_state.append(site.state_labels['up']) 
-                return MPS.from_product_state(model.lat.mps_sites(), p_state, bc='finite')
-            if model_type == "Kondo":
-                state = ["up_e up_i"] * L   # electron site, impurity site
-                chain = model.lat.mps_sites()
-                return MPS.from_product_state(chain, state, bc = bc)
-            if model_type == "AIM":
-                p_state = []
-                site = model.init_sites(model_params)
-                L = len(model.lat.mps_sites())
-                for i in range(L):
-                    if i==0:
-                        p_state.append(np.array([1] * 16, dtype=complex)/4)
-                    else:
-                        p_state.append(site.state_labels['up_l down_r']) 
-                return MPS.from_product_state(model.lat.mps_sites(), p_state, bc='finite')
-
-                
-        else:
-            raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
-
     
     @property
     def available_models(self):

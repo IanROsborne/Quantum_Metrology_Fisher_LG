@@ -93,7 +93,7 @@ class KondoChain(KondoModel, NearestNeighborModel):
         
         return lat
 
-    def _initial_state_kondo(self, target_Sz = None):
+    def _set_initial_state(self, target_Sz = None):
             """
             Construct a half-filled product state with total Sz = target_Sz.
             """
@@ -194,8 +194,8 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
         self.add_onsite_term(U, imp, 'NuNd')
 
         # exchange coupling bath-impurity
-        self.add_coupling_term(V , imp-1, imp, 'Cdu', 'Cu', plus_hc= True)
-        self.add_coupling_term(V , imp-1, imp, 'Cdd', 'Cd', plus_hc= True)
+        self.add_coupling_term(-V , imp-1, imp, 'Cdu', 'Cu', plus_hc= True)
+        self.add_coupling_term(-V , imp-1, imp, 'Cdd', 'Cd', plus_hc= True)
 
         # h: symmetry breaking Zeeman field
         if h != 0:
@@ -204,45 +204,28 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
                 self.add_onsite(-1.0 * h, u, "Sz")
 
 
-    def _set_initial_state(self, model_params):
-                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
-        
+    def _set_initial_state(self, target_Sz = None):
+        '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
 
-                bc = model_params.get('bc' , 'finite')
-                L = model_params['L']
-                
-                if model_type is not None:
-                    if model_type in ['Ising']:
-                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
-                    if model_type == "AIM_L":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        for i in range(L+1):
-                            if i == L//2:
-                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
-                            else:
-                                p_state.append(site.state_labels['up']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-                    if model_type == "Kondo":
-                        state = ["up_e up_i"] * L   # electron site, impurity site
-                        chain = self.lat.mps_sites()
-                        return MPS.from_product_state(chain, state, bc = bc)
-                    if model_type == "AIM":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        L = len(self.lat.mps_sites())
-                        for i in range(L):
-                            if i==0:
-                                p_state.append(np.array([1] * 16, dtype=complex)/4)
-                            else:
-                                p_state.append(site.state_labels['up_l down_r']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-        
-                        
-                else:
-                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
-    
+        model_params = self.model_params
+        L = len(self.lat.mps_sites())
 
+        if target_Sz is None:
+            target_Sz = 0
+
+        p_state = []
+        site = self.init_sites(model_params)
+        while i < L:
+            while t < target_Sz:
+                p_state.append(site.state_labels['up']) 
+                i += 1
+                t += 1
+            p_state.append(site.state_labels['down']) 
+            i += 1
+            p_state.append(site.state_labels['up']) 
+            i += 1
+        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+             
 
 class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     r"""1D single-site Anderson impurity model 
@@ -346,45 +329,37 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         L = self.lat.N_sites
         return L//2
 
-    def _set_initial_state(self, model_params):
-                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
-        
-    
-                bc = model_params.get('bc' , 'finite')
-                L = model_params['L']
-                
-                if model_type is not None:
-                    if model_type in ['Ising']:
-                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
-                    if model_type == "AIM_L":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        for i in range(L+1):
-                            if i == L//2:
-                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
-                            else:
-                                p_state.append(site.state_labels['up']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-                    if model_type == "Kondo":
-                        state = ["up_e up_i"] * L   # electron site, impurity site
-                        chain = self.lat.mps_sites()
-                        return MPS.from_product_state(chain, state, bc = bc)
-                    if model_type == "AIM":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        L = len(self.lat.mps_sites())
-                        for i in range(L):
-                            if i==0:
-                                p_state.append(np.array([1] * 16, dtype=complex)/4)
-                            else:
-                                p_state.append(site.state_labels['up_l down_r']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-        
-                        
-                else:
-                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
-        
+    def _set_initial_state(self, target_Sz):
+        r'''Returns a compatible initial state within the requested Sz sector'''
 
+        L = len(self.lat.mps_sites())
+        p_state = []
+        model_params = self.model_params
+        site = self.init_sites(model_params)
+        target_Sz = target_Sz + L
+        
+        if target_Sz > 2 * L -1:
+            raise ValueError('L')
+        if target_Sz <= L-1:
+            for i in range( L-1):
+                if i < target_Sz:
+                    p_state.append(site.state_labels['up_l down_r']) 
+                else:
+                    p_state.append(site.state_labels['down_l down_r']) 
+            p_state.insert(L//2, site.state_labels['down_l down_r'])
+        else: 
+            for i in range( L):
+                if i < target_Sz - L+1:
+                    if i == L//2:
+                        p_state.append(site.state_labels['down_l up_r']) 
+                    else:
+                        p_state.append(site.state_labels['up_l up_r']) 
+                else:
+                    if i == L//2:
+                        p_state.append(site.state_labels['down_l down_r']) 
+                    else:
+                        p_state.append(site.state_labels['up_l down_r']) 
+        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
 
 
 class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
@@ -432,41 +407,25 @@ class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
         # longitudinal - z field
         self.add_onsite(-1.0 * hz, 0, 'Sigmaz')
 
-    def _set_initial_state(self, model_params):
-                '''Returns an initial state suitable for the given model which is compatible with DMRG'''
-        
+    def _set_initial_state(self, target_Sz = None):
+            '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
     
-                bc = model_params.get('bc' , 'finite')
-                L = model_params['L']
+            model_params = self.model_params
+            L = len(self.lat.mps_sites())
+    
+            if target_Sz is None:
+                target_Sz = 0
+    
+            p_state = []
+            site = self.init_sites(model_params)
+            while i < L:
+                while t < target_Sz:
+                    p_state.append(site.state_labels['up']) 
+                    i += 1
+                    t += 1
+                p_state.append(site.state_labels['down']) 
+                i += 1
+                p_state.append(site.state_labels['up']) 
+                i += 1
+            return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
                 
-                if model_type is not None:
-                    if model_type in ['Ising']:
-                        return MPS.from_lat_product_state(self.lat, [['up']], bc = bc)
-                    if model_type == "AIM_L":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        for i in range(L+1):
-                            if i == L//2:
-                                p_state.append(np.array([1./ 2, 1./ 2, 1./ 2, 1./ 2], dtype=complex))
-                            else:
-                                p_state.append(site.state_labels['up']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-                    if model_type == "Kondo":
-                        state = ["up_e up_i"] * L   # electron site, impurity site
-                        chain = self.lat.mps_sites()
-                        return MPS.from_product_state(chain, state, bc = bc)
-                    if model_type == "AIM":
-                        p_state = []
-                        site = self.init_sites(model_params)
-                        L = len(self.lat.mps_sites())
-                        for i in range(L):
-                            if i==0:
-                                p_state.append(np.array([1] * 16, dtype=complex)/4)
-                            else:
-                                p_state.append(site.state_labels['up_l down_r']) 
-                        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-        
-                        
-                else:
-                    raise ValueError(f'Select model which has been configured. Available models are: {model_dict}')
-        
