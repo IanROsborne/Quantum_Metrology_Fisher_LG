@@ -122,8 +122,8 @@ class KondoChain(KondoModel, NearestNeighborModel):
 
     
 
-class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
-    r"""Lanczos decomposed 1D single-site Anderson impurity model 
+class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
+    r"""1D single-site Anderson impurity model 
     
     Paramters:
 
@@ -139,9 +139,9 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
     
     """
 
-    couplings = {'t': 'Lanczos sites overlap',   #Lanczos off diagonals type: list, int
-                'eps_k' : 'Lanczos site energies',  #Lanczos diagonals type: list, int
-                'mu': 'impurity potential',    #on-site impurity potential
+    couplings = {'t': 'hopping',   #Lanczos off diagonals type: list, int
+                'mu' : 'conduction chemical potential',  #Lanczos diagonals type: list, int
+                'mu_d': 'impurity potential',    #on-site impurity potential
                 'U' : 'impurity Hubbard interaction',   #impurity Hubbard    
                 'V' : 'exchange coupling',      #impurity-bath hopping
                 'h' : 'Zeeman coupling'}  #breaks the SU(2) spin symmetry      
@@ -162,46 +162,46 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
     def init_terms(self, model_params):
 
         t = model_params['t']
-        eps_k = model_params.get('eps_k', -1.0)
+        mu = model_params.get('mu', 0)
         U = model_params['U']
-        mu = model_params['mu']
+        mu_d = model_params['mu_d']
         V = model_params['V']
         h = model_params.get('h', 0)
-        L = model_params['L']
-        imp = L     #location of impurity in Lanczos chain is the L+1 element
+        L = self.lat.N_sites
+        imp = 0    #location of impurity in Lanczos chain is the 0th element
+                   #note that this is hard coded in some places
 
         if type(t) in [float , int]:
-            t = [t] * L  
+            t = [float(t)] * L  
         else:
-            t = float(t) * (L / len(t))
-        # Lanczos bath off-diagonal terms
-        for i in range(L):
+            t = list(t) * (L // len(t))
+        t = [V] + t
+
+
+        # hopping
+        for i in range(L-1):
             self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdu', 'Cu', plus_hc= True)
             self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdd', 'Cd', plus_hc= True)
 
-        if type(eps_k) in [float , int]:
-            eps_k = [eps_k] * L
+        if type(mu) in [float , int]:
+            mu = [float(mu)] * L
         else:
-            eps_k = float(eps_k) * (L / len(eps_k))
-        # Lanczos bath diagonal terms
-        for i in range(L):
-            self.add_onsite_term(-1.0 * eps_k[i], i, 'Ntot')
+            mu = list(mu) * (L // len(mu))
+        mu = [mu_d] + mu
 
-        # impurity onsite energy
-        self.add_onsite_term(mu, imp, 'Ntot')
+
+        # onsite potentials
+        for i in range(L):
+            self.add_onsite_term(mu[i], i, 'Ntot')
 
         # impurity Hubbard interaction
         self.add_onsite_term(U, imp, 'NuNd')
 
-        # exchange coupling bath-impurity
-        self.add_coupling_term(-V , imp-1, imp, 'Cdu', 'Cu', plus_hc= True)
-        self.add_coupling_term(-V , imp-1, imp, 'Cdd', 'Cd', plus_hc= True)
-
         # h: symmetry breaking Zeeman field
         if h != 0:
-            for u in range(len(self.lat.unit_cell)):
-                # Sz Sz coupling
-                self.add_onsite(-1.0 * h, u, "Sz")
+            # Sz Sz coupling
+            for i in range(L):
+                self.add_onsite_term(-1.0 * h, i, "Sz")
 
 
     def _set_initial_state(self, target_Sz = None):
@@ -214,6 +214,8 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
             target_Sz = 0
 
         p_state = []
+        i = 0
+        t = 0
         site = self.init_sites(model_params)
         while i < L:
             while t < target_Sz:
@@ -222,13 +224,14 @@ class AndersonImpurityModel_Lanczos(CouplingMPOModel, NearestNeighborModel):
                 t += 1
             p_state.append(site.state_labels['down']) 
             i += 1
-            p_state.append(site.state_labels['up']) 
-            i += 1
+            if i != L:
+                p_state.append(site.state_labels['up']) 
+                i += 1
         return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
              
 
-class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
-    r"""1D single-site Anderson impurity model 
+class AndersonImpurityModel_Bulk(CouplingMPOModel, NearestNeighborModel):
+    r"""1D single-site Anderson impurity model with impurity located in the bulk
     
     Paramters:
 

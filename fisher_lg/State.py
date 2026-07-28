@@ -1,10 +1,12 @@
+import itertools
+
 import numpy as np
 
 from tenpy.networks.mps import MPS
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain, AndersonImpurityModel_Lanczos
+from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain, AndersonImpurityModel_Bulk
 
 
 class State_Evo(MPS):
@@ -16,7 +18,7 @@ class State_Evo(MPS):
         "Ising" : TFIsingChain, 
         "Kondo" : KondoChain, 
         "AIM" : AndersonImpurityModel, 
-        "AIM_L" : AndersonImpurityModel_Lanczos}
+        "AIM_B" : AndersonImpurityModel_Bulk}
 
     def __init__(self,
                  sites,
@@ -331,17 +333,36 @@ class State_Evo(MPS):
         return qfi
     
     def spin_spin_correlations(self, sites1 = None, sites2 = None):
-        '''Calculates spin-spin correlation function as an array < \\vec \\sigma_1 . \\vec \\sigma_2 >
+        r'''Calculates spin-spin correlation function as an array < \\vec S_1 . \\vec S_2 >
         Parameters:
         self = State_Evo(MPS) state
         site1 = array of sites for S_1. If None, site1 = range(0,L)
         site2 = array of sites for S_2. If None, site2 = range(0,L)
-        '''
-        SxSx = np.array(self.correlation_function(ops1 = 'Sxi', ops2 = 'Sxe', sites1 = sites1, sites2 = sites2)) * 2
-        SySy = np.real(np.array(self.correlation_function(ops1 = 'Syi', ops2 = 'Sye', sites1 = sites1, sites2 = sites2)) )* 2
-        SzSz = np.array(self.correlation_function(ops1 = 'Szi', ops2 = 'Sze', sites1 = sites1, sites2 = sites2)) * 2
 
-        return ( SxSx + SySy + SzSz) 
+        returns an np.array of the correlation matrix or a dictionary of correlation matrices if
+        the unit cell has more than one site
+        '''
+        from tenpy.networks.site import GroupedSite
+
+        if isinstance(self.model.lat.unit_cell[0], GroupedSite):
+            labels = self.model.lat.unit_cell[0].labels
+        else:
+            labels = ['']
+        SS = {}
+        #calculate Sz Sz correlation
+        for S_site1 in labels:
+            for S_site2 in labels:
+                SzSz = np.array(self.correlation_function(ops1 = 'Sz'+S_site1, ops2 = 'Sz'+S_site2, sites1 = sites1, sites2 = sites2))
+                SmSp = np.array(self.correlation_function(ops1 = 'Sm'+S_site1, ops2 = 'Sp'+S_site2, sites1 = sites1, sites2 = sites2))
+                SpSm = np.array(self.correlation_function(ops1 = 'Sp'+S_site1, ops2 = 'Sm'+S_site2, sites1 = sites1, sites2 = sites2))
+                            
+                SS[S_site1 + S_site2] = np.real(SzSz + (1./2.) * (SmSp + SpSm))
+
+        if len(SS) == 1:
+            return list(SS.values())[0]
+        else:
+            return SS
+
 
         
     def apply_Q_MPO(self, op, op_sum = True):
@@ -394,7 +415,6 @@ class State_Evo(MPS):
         engine.calc_U(2, dt )
 
         return phi_t, engine
-    
 
 
     def calculate_QtQ(self, op, op_sum = True, calc_upto_2t = False ):
@@ -547,6 +567,22 @@ class State_Evo(MPS):
             
         return len(deg_list), deg_list, op_expe_list
 
+    def integrated_spin_correlation(self):
+        r'''returns the integrated spin correlation defined as
+        
+        Sigma(x) = 1 + \sum_i^x (< \vec S_i \cdot \vec S_d >)/(< \vec S_d \cdot \vec S_d >)
+
+        as an array of length L
+        '''
+
+        Sigma_x = [1.]
+        SS_corr = self.spin_spin_correlations(sites1= [0])[0]
+
+        for i in range(1, len(SS_corr)):
+            Sigma_x += [Sigma_x[i-1] + float(SS_corr[i]/SS_corr[0])]
+
+        return Sigma_x
+
         
 
 
@@ -556,10 +592,10 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
     if apply_to_GS then it ftn will return op | GS > as a MPS
     """
     if model is None:
-        model_type = model_params.get("model_type", "Ising")
-        if model_type == "Ising":
-            model = TFIChain(model_params)
-        else: 
+        try:
+            model_type = model_params['model_type']
+            model = State_Evo.model_dict[model_type](model_params)
+        except: 
             raise ValueError("Model type not configured yet")
     L = model.lat.N_cells
     bc = model_params.get('bc', 'finite')
