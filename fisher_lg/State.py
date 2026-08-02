@@ -89,11 +89,11 @@ class State_Evo(MPS):
 
         #run dmrg
         if initial_state is None:
-            psi_temp = model._set_initial_state(target_Sz = model_params.get('target_Sz', None))
+            psi_init = model._set_initial_state(target_Sz = model_params.get('target_Sz', None))
         else:
-            psi_temp = initial_state
+            psi_init = initial_state
 
-        eng = dmrg.TwoSiteDMRGEngine(psi_temp, model, dmrg_params)
+        eng = dmrg.TwoSiteDMRGEngine(psi_init, model, dmrg_params)
         energy, psi_temp = eng.run()
 
         obj = cls(
@@ -113,6 +113,7 @@ class State_Evo(MPS):
         obj.model_type = dict(model_params).get("model_type", None)
         obj.initial_state = initial_state
         obj.bc = bc
+        obj.initial_state = psi_init
 
         return obj
     
@@ -567,19 +568,21 @@ class State_Evo(MPS):
             
         return len(deg_list), deg_list, op_expe_list
 
-    def integrated_spin_correlation(self):
+    def integrated_spin_correlation(self, Sz_corr = False):
         r'''returns the integrated spin correlation defined as
         
         Sigma(x) = 1 + \sum_i^x (< \vec S_i \cdot \vec S_d >)/(< \vec S_d \cdot \vec S_d >)
 
         as an array of length L
         '''
-
         Sigma_x = [1.]
-        SS_corr = self.spin_spin_correlations(sites1= [0])[0]
+        if Sz_corr:
+            S_corr = self.correlation_function('Sz', 'Sz', sites1= [0])[0]
+        else:
+            S_corr = self.spin_spin_correlations(sites1= [0])[0]
 
-        for i in range(1, len(SS_corr)):
-            Sigma_x += [Sigma_x[i-1] + float(SS_corr[i]/SS_corr[0])]
+        for i in range(1, len(S_corr)):
+            Sigma_x += [Sigma_x[i-1] + float(S_corr[i]/S_corr[0])]
 
         return Sigma_x
 

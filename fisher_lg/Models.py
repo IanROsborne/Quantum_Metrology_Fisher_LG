@@ -151,8 +151,9 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         self.model_params = model_params
 
     def init_sites(self, model_params):
-        conserve = model_params.get('conserve', None)
-        return SpinHalfFermionSite(cons_N= conserve , cons_Sz= None)
+        conserve = model_params.get('conserve', 'N')
+        cons_Sz = model_params.get('cons_Sz', None)
+        return SpinHalfFermionSite(cons_N= conserve , cons_Sz= cons_Sz)
 
     def init_lattice(self, model_params):
         L = model_params['L']
@@ -175,8 +176,7 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
             t = [float(t)] * L  
         else:
             t = list(t) * (L // len(t))
-        t = [V] + t
-
+        t = [V* np.sqrt(2)] + t
 
         # hopping
         for i in range(L-1):
@@ -219,13 +219,16 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         site = self.init_sites(model_params)
         while i < L:
             while t < target_Sz:
-                p_state.append(site.state_labels['up']) 
+                p_state.append('up') 
                 i += 1
                 t += 1
-            p_state.append(site.state_labels['down']) 
+            if i != L-1:
+                p_state.append('down') 
+            else: 
+                p_state.append('empty')
             i += 1
             if i != L:
-                p_state.append(site.state_labels['up']) 
+                p_state.append('up') 
                 i += 1
         return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
              
@@ -346,22 +349,22 @@ class AndersonImpurityModel_Bulk(CouplingMPOModel, NearestNeighborModel):
         if target_Sz <= L-1:
             for i in range( L-1):
                 if i < target_Sz:
-                    p_state.append(site.state_labels['up_l down_r']) 
+                    p_state.append('up_l down_r') 
                 else:
-                    p_state.append(site.state_labels['down_l down_r']) 
-            p_state.insert(L//2, site.state_labels['down_l down_r'])
+                    p_state.append('down_l down_r') 
+            p_state.insert(L//2, 'down_l down_r')
         else: 
             for i in range( L):
                 if i < target_Sz - L+1:
                     if i == L//2:
-                        p_state.append(site.state_labels['down_l up_r']) 
+                        p_state.append('down_l up_r') 
                     else:
-                        p_state.append(site.state_labels['up_l up_r']) 
+                        p_state.append('up_l up_r') 
                 else:
                     if i == L//2:
-                        p_state.append(site.state_labels['down_l down_r']) 
+                        p_state.append('down_l down_r') 
                     else:
-                        p_state.append(site.state_labels['up_l down_r']) 
+                        p_state.append('up_l down_r') 
         return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
 
 
@@ -423,12 +426,13 @@ class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
             site = self.init_sites(model_params)
             while i < L:
                 while t < target_Sz:
-                    p_state.append(site.state_labels['up']) 
+                    p_state.append('up') 
                     i += 1
                     t += 1
-                p_state.append(site.state_labels['down']) 
+                p_state.append('down') 
                 i += 1
-                p_state.append(site.state_labels['up']) 
-                i += 1
+                if i != L:
+                    p_state.append('up') 
+                    i += 1
             return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
                 
