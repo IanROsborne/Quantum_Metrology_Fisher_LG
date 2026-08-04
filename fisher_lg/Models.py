@@ -180,8 +180,8 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
 
         # hopping
         for i in range(L-1):
-            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdu', 'Cu', plus_hc= True)
-            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdd', 'Cd', plus_hc= True)
+            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdu', 'Cu', plus_hc= True, op_string = 'JW')
+            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdd', 'Cd', plus_hc= True, op_string = 'JW')
 
         if type(mu) in [float , int]:
             mu = [float(mu)] * L
