@@ -172,17 +172,19 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         imp = 0    #location of impurity in Lanczos chain is the 0th element
                    #note that this is hard coded in some places
 
-        if type(t) in [float , int]:
-            t = [float(t)] * L  
-        else:
-            t = list(t) * (L // len(t))
-        t = [V* np.sqrt(2)] + t
-
-        # hopping
-        for i in range(L-1):
-            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdu', 'Cu', plus_hc= True, op_string = 'JW')
-            self.add_coupling_term(-1.0 * t[i], i, i+1, 'Cdd', 'Cd', plus_hc= True, op_string = 'JW')
-
+        # Hopping terms — use add_local_term so that coupling_term_handle_JW
+        # inserts the correct Jordan-Wigner string automatically.
+        # add_coupling_term is a low-level function that does NOT handle JW;
+        # using it for spinful fermions gives wrong signs in mixed-spin sectors.
+        # ------------------------------------------------------------------
+        for i in range(L - 1):
+            j = i + 1
+            # Bond (0,1) hybridises the impurity to the chain via V.
+            # All other bonds are plain conduction hops with amplitude t.
+            strength = V if i == imp else t
+            for op_dag, op in (('Cdu', 'Cu'), ('Cdd', 'Cd')):
+                self.add_local_term(-strength,  [(op_dag, [i, 0]), (op, [j, 0])], plus_hc=True)
+                
         if type(mu) in [float , int]:
             mu = [float(mu)] * L
         else:
@@ -207,7 +209,6 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
     def _set_initial_state(self, target_Sz = None):
         '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
 
-        model_params = self.model_params
         L = len(self.lat.mps_sites())
 
         if target_Sz is None:
@@ -216,7 +217,6 @@ class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
         p_state = []
         i = 0
         t = 0
-        site = self.init_sites(model_params)
         while i < L:
             while t < target_Sz:
                 p_state.append('up') 
