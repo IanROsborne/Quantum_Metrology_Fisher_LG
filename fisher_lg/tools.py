@@ -1,6 +1,10 @@
 import sys
+import pickle
 
 import numpy as np
+from tenpy.networks.mps import MPS
+
+from fisher_lg.State import State_Evo
 
 class ProgressBar:
     r'''Implements an updatable progress bar'''
@@ -60,3 +64,87 @@ def combine_npy_files(file1_path, file2_path, output_path):
     np.save(output_path, final, allow_pickle= True)
     print(f"Combined data saved to {output_path}")
     print(f"Total entries: {len(final)}")
+ 
+ 
+def save_state(psi, filename):
+    """
+    Save everything needed to reconstruct `psi` later.
+ 
+    Parameters
+    ----------
+    psi : tenpy.networks.mps.MPS
+        The ground-state MPS from your DMRG run (what you called psi_temp).
+    model_params : dict
+        Parameters used to build the model.
+    extra_params : dict
+        Any additional parameters you want to keep alongside the state.
+    energy : float
+        Ground-state energy (or whatever scalar you were attaching to
+        psi.energy).
+    filename : str
+        Path to write the pickle file to, e.g. "ground_state.pkl".
+    """
+    # Force _B / _S into real lists of independent tensor copies. 
+    Bs = [B.copy() for B in psi._B]
+    Ss = [S.copy() if S is not None else None for S in psi._S]
+ 
+    data = {
+        "sites": psi.sites,
+        "Bs": Bs,
+        "Ss": Ss,
+        "bc": psi.bc,
+        "form": psi.form,
+        "norm": psi.norm,
+        "unit_cell_width": getattr(psi, "unit_cell_width", None),
+        "model_params": psi.model_params,
+        "extra_params": psi.extra_params,
+        "energy": psi.energy,
+    }
+ 
+    with open(filename, "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+ 
+    print(f"Saved DMRG state to {filename}")
+ 
+ 
+def load_state(filename):
+    """
+    Load a previously-saved DMRG ground state.
+ 
+    Returns
+    -------
+    psi : tenpy.networks.mps.MPS
+        Fully reconstructed MPS, ready to use directly for expectation
+        values, correlation functions, etc. `psi.model_params`,
+        `psi.extra_params`, and `psi.energy` are attached as attributes,
+        same as in your original code.
+    model_params : dict
+    extra_params : dict
+    energy : float
+    """
+    with open(filename, "rb") as f:
+        data = pickle.load(f)
+ 
+    psi = MPS(
+        data["sites"],
+        data["Bs"],
+        data["Ss"],
+        bc=data["bc"],
+        form=data["form"],
+        norm=data["norm"],
+    )
+ 
+    if data.get("unit_cell_width") is not None:
+        psi.unit_cell_width = data["unit_cell_width"]
+ 
+    model_params = data["model_params"]
+    extra_params = data["extra_params"]
+    energy = data["energy"]
+
+    psi = State_Evo.from_MPS(psi, model_params = model_params, extra_params = extra_params)
+    psi.set_energy(energy)
+    
+    return psi
+ 
+ 
+ 

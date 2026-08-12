@@ -28,7 +28,11 @@ class State_Evo(MPS):
                  form='B',
                  norm=1.0,
                  unit_cell_width=None,
-                 understood_shift_symmetry=False):
+                 understood_shift_symmetry=False,
+                 model_params = None,
+                 extra_params = None,
+                 energy = None,
+                 initial_state = None):
 
         super().__init__(
             sites,
@@ -41,11 +45,6 @@ class State_Evo(MPS):
             understood_shift_symmetry=understood_shift_symmetry,
         )
 
-        self.model = None
-        self.energy = None
-        self.params = None
-        self.initil_state = None
-        self.bc = bc
         
     @classmethod
     def from_dmrg(cls, model_params, dmrg_params=None, Q_model = None, initial_state = None):
@@ -118,7 +117,7 @@ class State_Evo(MPS):
         return obj
     
     @classmethod
-    def from_MPS(cls, psi, model_params):
+    def from_MPS(cls, psi : MPS, model_params = None, extra_params = None, energy = None):
         obj = cls(
         psi.sites,
         [B.copy() for B in psi._B],
@@ -129,11 +128,35 @@ class State_Evo(MPS):
         psi.unit_cell_width,
         )
 
-        obj.set_model(model_params = model_params)
-        obj.extra_params = None
+        if model_params is not None:
+            obj.set_model(model_params = model_params)
+        if extra_params is not None:
+            obj.extra_params = extra_params
         obj.initial_state = None
+        psi.energy = energy        
 
         return obj
+    
+    @classmethod
+    def from_data(cls, data):
+        '''create MPS object from object array configured for from_data classmethod'''
+        sites, Bs, Ss, bc, form, norm, unit_cell_width, model_params, extra_params, energy = data
+        obj = cls(
+        sites,
+        Bs,
+        Ss,
+        bc,
+        form,
+        norm,
+        unit_cell_width,
+        )
+
+        obj.set_model(model_params = dict(model_params))
+        obj.extra_params = dict(extra_params)
+        obj.initial_state = None
+        obj.energy = energy
+
+        return obj 
     
     @classmethod
     def from_dmrg_search_Sz(cls, model_params, dmrg_params=None, scan_Sz_with_Sp = False):
@@ -281,10 +304,10 @@ class State_Evo(MPS):
             eng = dmrg.TwoSiteDMRGEngine(psi_temp, self.model, self.extra_params)
             energy, psi_temp = eng.run()
             self.energy = energy
-        elif E0 in float:
+        elif type(E0) == float or np.float64:
             self.energy = E0
         else:
-            raise ValueError("E0 must be float or None")
+            raise ValueError("E0 must be float,, np.float, or None instead of " + str(type(E0)))
         
         return self.energy     
 
@@ -366,17 +389,19 @@ class State_Evo(MPS):
 
 
         
-    def apply_Q_MPO(self, op, op_sum = True):
+    def apply_Q_MPO(self, op, op_sum = True, site = None):
         phi = self.copy()
         L = self.L
         model = self.model
         model_params = self.model_params
         extra_params = self.extra_params
+        if site is None:
+            site = L//2
         if op_sum:
             mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
             mpo.apply(phi, options={'compression_method' : 'SVD'})
         else:
-            phi.apply_local_op(L//2, op)
+            phi.apply_local_op(site, op)
 
         phi = State_Evo.from_MPS(phi, model_params)
         phi.set_extra_params(extra_params = extra_params)
@@ -418,9 +443,15 @@ class State_Evo(MPS):
         return phi_t, engine
 
 
-    def calculate_QtQ(self, op, op_sum = True, calc_upto_2t = False ):
-        """ Calculates 1/2 < psi | {Q(t), Q} | psi > 
-            for psi the ground state of model """
+    def calculate_QtQ(self, op1, op2 = None, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1.):
+        """ Calculates 1/2 < psi | {Q1^dag(t), Q2} | psi > 
+            for psi the ground state of model.
+            It is important to note the hermitian conjugate Q1^dag(t). This means the result is always
+            real even when Q is non-hermitian, e.g. when calculating Sx from Sp and Sm. 
+
+            scalar_product multiplies the y-axis data to scale for easy conversion of the spin operators to 
+            Pauli operators. 
+              """
         
         extra_params = self.extra_params.copy()
         E0 = self.energy
@@ -429,22 +460,28 @@ class State_Evo(MPS):
         M = self.model
 
         #DMRG engine
-        # apply phi = Q |psi > Must be careful here because some processes
+        # apply phi = Q1 |psi > Must be careful here because some processes
         # in MPS and MPO by default normalize the output wavefunction
-        phi = self.apply_Q_MPO( op, op_sum = op_sum)
+        phi = self.apply_Q_MPO( op1, op_sum = op_sum, site = site)
+        phi.set_energy(E0)
+
+        if op2 is None: #xi = Q2 |psi >
+            xi = phi
+        else:
+            xi = self.apply_Q_MPO( op2, op_sum = op_sum, site = site)
         
         # TEBD engine
         phi_t, engine = phi.TEBD_initialize()
 
         times = [engine.evolved_time]
-        expec_U = [np.real(phi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q(t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
+        expec_U = [scalar_product * np.real(xi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q^dag (t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
         
         for _ in range(N_times):
 
             engine.run()
             t = engine.evolved_time
             times.append(round(t, 4))
-            expec_U.append(np.real(phi.overlap(phi_t) * np.exp(1j * E0 * t)))
+            expec_U.append(scalar_product * np.real(xi.overlap(phi_t) * np.exp(1j * E0 * t)))
             
         if calc_upto_2t: #option used for calculate_LG_correlator which combines two legs 
                         #of time and expec_U for calculating 2 C(t) - C(2t) easily
@@ -458,18 +495,18 @@ class State_Evo(MPS):
                 
                 engine.run()
                 t= engine.evolved_time
-                expec = np.real(phi.overlap(phi_t) * np.exp(1j * E0 * t))
+                expec = scalar_product * np.real(xi.overlap(phi_t) * np.exp(1j * E0 * t))
                 times += [-100, round(t, 4)]
                 expec_U += [-100, expec] #so that if the implementation is wrong we will see it in the data
             
         return times, expec_U
     
-    def calculate_LG_correlator(self, op, op_sum = True ):
+    def calculate_LG_correlator(self, op, op_sum = True , site = 0):
         """Returns  times, 2 [C(t) - C(0)] - [C(2t) - C(0)], 2C(t) - C(2t) """
 
         #Calculates C values from 0 to time_end
-        times, expec_U = self.calculate_QtQ(op, op_sum = op_sum, calc_upto_2t  = True )    #Calculates only the extra C values needed to calculate K
-
+        times, expec_U = self.calculate_QtQ(op, op_sum = op_sum, calc_upto_2t  = True, site = site )    #Calculates only the extra C values needed to calculate K
+        
         half_len = len(times)//2 +1
         LG_B_lst = []
         K_lst = []
@@ -481,7 +518,7 @@ class State_Evo(MPS):
         return times[: half_len] , LG_B_lst, K_lst 
 
 
-    def calculate_LG_bound(self, op, op_sum = True, return_QFI = False):
+    def calculate_LG_bound(self, op, op_sum = True, return_QFI = False, site = 0, scalar_product = 1.):
         """Calculates the lower bound on the QFI set by the LG correlator QFI > 8 LG_B_Max
         using a "search a little after the first local maximum" algorithm """
 
@@ -490,12 +527,12 @@ class State_Evo(MPS):
         start_time = extra_params.get('start_time' , 0)
 
         #Initialize model and phi through building the Q_MPO
-        phi = self.apply_Q_MPO( op, op_sum = op_sum)
+        phi = self.apply_Q_MPO( op, op_sum = op_sum, site = site)
 
         #Get QFI
         qfi = None
         if return_QFI:
-            qfi = self.QFI( op, op_sum = op_sum)
+            qfi = self.QFI( op, op_sum = op_sum, site = site)
         
         # TEBD engine
         phi_t, engine = phi.TEBD_initialize()
@@ -514,13 +551,13 @@ class State_Evo(MPS):
         check_after = extra_params.get('check_after', 5)
 
         times = [engine.evolved_time]
-        expec_U = [np.real(phi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q(t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
+        expec_U = [scalar_product * np.real(phi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q(t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
     
         while i < step_max:     #loop until the end
             #construct the time correlator list
             engine.run()
             t = engine.evolved_time
-            expec_U.append(np.real(phi.overlap(phi_t) * np.exp(1j * E0 * t)))
+            expec_U.append(scalar_product * np.real(phi.overlap(phi_t) * np.exp(1j * E0 * t)))
             times.append(t)
 
             while 2 *i <= len(expec_U)-1:    #when the correlator list is long enough calculate...
