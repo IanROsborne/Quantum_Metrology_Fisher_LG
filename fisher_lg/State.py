@@ -250,7 +250,11 @@ class State_Evo(MPS):
         cp.model = self.model
         cp.model_params = self.model_params
         cp.extra_params = self.extra_params
-        cp.energy = self.energy
+        try:
+            cp.energy = self.energy
+        except ValueError:
+            cp.energy = None
+
         cp.model_type = dict(self.model_params).get("model_type", None)
         cp.initial_state = self.initial_state
         cp.bc = self.bc
@@ -307,7 +311,7 @@ class State_Evo(MPS):
         elif type(E0) == float or np.float64:
             self.energy = E0
         else:
-            raise ValueError("E0 must be float,, np.float, or None instead of " + str(type(E0)))
+            raise ValueError("E0 must be float, np.float, or None instead of " + str(type(E0)))
         
         return self.energy     
 
@@ -389,21 +393,25 @@ class State_Evo(MPS):
 
 
         
-    def apply_Q_MPO(self, op, op_sum = True, site = None):
+    def apply_Q_MPO(self, op, op_sum = True, site = None, truncation_params = None):
         phi = self.copy()
         L = self.L
         model = self.model
         model_params = self.model_params
         extra_params = self.extra_params
+        compression_method = extra_params.get('compression_method', 'SVD')
         if site is None:
             site = L//2
         if op_sum:
             mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
-            mpo.apply(phi, options={'compression_method' : 'SVD'})
+            mpo.apply(phi, options={'compression_method' : compression_method, 'trunc_params': {
+            'chi_max': 1500,
+            'svd_min': 1e-9}})
         else:
             phi.apply_local_op(site, op)
 
         phi = State_Evo.from_MPS(phi, model_params)
+        phi.set_energy(self.energy)
         phi.set_extra_params(extra_params = extra_params)
         
         return  phi
@@ -431,21 +439,18 @@ class State_Evo(MPS):
         if start_time > 0 and start_time < dt:
             engine.calc_U(order = 2, delta_t = start_time)
             engine.evolve( N_steps = 1,  dt = start_time)
-            engine.evolved_time = round(engine.evolved_time, 4)
-        elif start_time >0:
-            initial_steps = round(start_time / dt, 1)
+        elif start_time > 0:
+            initial_steps = int(start_time / dt)
             dt_prime = round(start_time/initial_steps, 4)
             engine.calc_U(2, dt_prime )
             engine.evolve(initial_steps,   dt = dt_prime)
-            engine.evolved_time = round(engine.evolved_time, 4)
         engine.calc_U(2, dt )
 
         return phi_t, engine
 
 
-    def calculate_QtQ(self, op1, op2 = None, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1.):
+    def calculate_QtQ(self, op1, op2 = None, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1., verbose = False):
         """ Calculates 1/2 < psi | {Q1^dag(t), Q2} | psi > 
-            for psi the ground state of model.
             It is important to note the hermitian conjugate Q1^dag(t). This means the result is always
             real even when Q is non-hermitian, e.g. when calculating Sx from Sp and Sm. 
 
@@ -455,7 +460,6 @@ class State_Evo(MPS):
         
         extra_params = self.extra_params.copy()
         E0 = self.energy
-        start_time = extra_params.get('start_time',0)
         N_times = extra_params.get('N_times', 10)
         M = self.model
 
@@ -463,7 +467,6 @@ class State_Evo(MPS):
         # apply phi = Q1 |psi > Must be careful here because some processes
         # in MPS and MPO by default normalize the output wavefunction
         phi = self.apply_Q_MPO( op1, op_sum = op_sum, site = site)
-        phi.set_energy(E0)
 
         if op2 is None: #xi = Q2 |psi >
             xi = phi
@@ -472,9 +475,14 @@ class State_Evo(MPS):
         
         # TEBD engine
         phi_t, engine = phi.TEBD_initialize()
+        start_time = engine.evolved_time
 
         times = [engine.evolved_time]
         expec_U = [scalar_product * np.real(xi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q^dag (t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
+
+        if verbose != False:
+            print("times", "QtQ data")
+            print(times, expec_U)
         
         for _ in range(N_times):
 
@@ -482,17 +490,21 @@ class State_Evo(MPS):
             t = engine.evolved_time
             times.append(round(t, 4))
             expec_U.append(scalar_product * np.real(xi.overlap(phi_t) * np.exp(1j * E0 * t)))
+            if verbose != False:
+                print(times, expec_U)
+            
             
         if calc_upto_2t: #option used for calculate_LG_correlator which combines two legs 
                         #of time and expec_U for calculating 2 C(t) - C(2t) easily
 
-            extra_params['N_steps'] = 2 * (extra_params['N_steps'])
             N_times = round( N_times /2)
-            engine = tebd.TEBDEngine(phi_t, M, extra_params)
-            engine.evolved_time = t
+            
+            if extra_params.get('start_time', 0) != 0:
+                raise ValueError("Needs array index to be proportional to time. start_time must be 0.")
             
             for _ in range(N_times):
                 
+                engine.run()
                 engine.run()
                 t= engine.evolved_time
                 expec = scalar_product * np.real(xi.overlap(phi_t) * np.exp(1j * E0 * t))
@@ -500,31 +512,101 @@ class State_Evo(MPS):
                 expec_U += [-100, expec] #so that if the implementation is wrong we will see it in the data
             
         return times, expec_U
+
+
+    def calculate_QQtQQ(self, ops_list, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1.):
+        """ Calculates 1/2 < psi |Q4^dag Q3^dag(t) Q2 Q1 + Q1^dag Q2^dag Q3(t) Q4| psi >  
+
+            ops : list of list of 4 operator strings - will sum the contributions from each list of operators
+            scalar_product : float - multiplies the y-axis data to scale for easy conversion of the spin operators to 
+            Pauli operators. 
+                """
+        
+        extra_params = self.extra_params.copy()
+        N_times = extra_params.get('N_times', 10)
+        step_size = extra_params['dt'] * extra_params['N_steps']
+        list_len = 2 * N_times +1 if calc_upto_2t else N_times +1
+
+        times = [round(i * step_size, 4) for i in range(N_times + 1)]
+        if calc_upto_2t:
+            times += [-100 if i % 2 == 0 else round(times[-1] +  step_size * (i +1), 4)  for i in range(N_times)]
+
+        expec_tot = np.zeros(list_len)
+        for op1, op2, op3, op4 in ops_list:
+
+            #DMRG engine
+            # apply phi = Q1 |psi > Must be careful here because some processes
+            # in MPS and MPO by default normalize the output wavefunction
+            phi1 = self.apply_Q_MPO( op1, op_sum = op_sum, site = site)
+            phi21 = phi1.apply_Q_MPO( op2, op_sum = op_sum, site = site)
+            phi4 = self.apply_Q_MPO( op4, op_sum = op_sum, site = site)
+            
+            # TEBD engines for first term
+            phi21_t, engine_21 = phi21.TEBD_initialize()
+            phi4_t, engine_4 = phi4.TEBD_initialize()
+
+            #times = [engine_21.evolved_time]
+            phi43_t = phi4_t.apply_Q_MPO(op3, op_sum = op_sum, site = site)
+            expec_tot[0] += scalar_product * np.real(phi43_t.overlap(phi21_t))
+            
+            for n in range(N_times):
+
+                engine_21.run()
+                engine_4.run()
+                phi43_t = phi4_t.apply_Q_MPO(op3, op_sum = op_sum, site = site)
+                expec_tot[n+1] += scalar_product * np.real( phi43_t.overlap(phi21_t))
+                
+            if calc_upto_2t: #option used for calculate_LG_correlator which combines two legs 
+                            #of time and expec_U for calculating 2 C(t) - C(2t) easily
+
+                N_times_half = round( N_times /2)
+                if extra_params.get('start_time', 0) != 0:
+                    raise ValueError("Needs array index to be proportional to time. start_time must be 0.")
+                
+                for n in range(N_times_half):
+                    
+                    engine_21.run()
+                    engine_21.run()
+                    engine_4.run()
+                    engine_4.run()
+                    phi43_t = phi4_t.apply_Q_MPO(op3, op_sum = op_sum, site = site)
+                    expec_tot[N_times + n * 2  + 1 ] = -100  #so that if the implementation is wrong we will see it in the data
+                    expec_tot[N_times + n * 2  + 2 ] += scalar_product * np.real(phi43_t.overlap(phi21_t))
+                                       
+        return times, expec_tot
     
-    def calculate_LG_correlator(self, op, op_sum = True , site = 0):
+    def calculate_LG_correlator(self, op, op_sum = True , site = 0, scalar_product = 1., verbose = False , trichotomic = False):
         """Returns  times, 2 [C(t) - C(0)] - [C(2t) - C(0)], 2C(t) - C(2t) """
 
         #Calculates C values from 0 to time_end
-        times, expec_U = self.calculate_QtQ(op, op_sum = op_sum, calc_upto_2t  = True, site = site )    #Calculates only the extra C values needed to calculate K
-        
+        if trichotomic:
+            times, expec_U = self.calculate_QQtQQ(ops_list = op, op_sum = op_sum, calc_upto_2t  = True, site = site, scalar_product = scalar_product)    #Calculates only the extra C values needed to calculate K
+        else:
+            times, expec_U = self.calculate_QtQ(op, op_sum = op_sum, calc_upto_2t  = True, site = site, scalar_product = scalar_product, verbose = verbose )    #Calculates only the extra C values needed to calculate K
+
+        if self.model_params.get('start_time', 0) == 0:
+            C0 = expec_U[0]  
+        else:
+            phi = self.apply_Q_MPO( op, op_sum = op_sum, site = site)
+            C0 = scalar_product * np.real(phi.overlap(phi))
+
         half_len = len(times)//2 +1
         LG_B_lst = []
         K_lst = []
         # LG_B = 2C(t) - C(2t) - C(0)
         for i in range(half_len):
-            LG_B_lst += [expec_U[i] * 2 - expec_U[2 * i] - expec_U[0] ]
-            K_lst += [expec_U[i] * 2 - expec_U[2 * i] ]
+            LG_B_lst += [expec_U[i] * 2 - expec_U[2 * i] - C0 ]
+            K_lst +=    [expec_U[i] * 2 - expec_U[2 * i] ]
             
         return times[: half_len] , LG_B_lst, K_lst 
 
 
-    def calculate_LG_bound(self, op, op_sum = True, return_QFI = False, site = 0, scalar_product = 1.):
+    def calculate_LG_bound(self, op, op_sum = True, return_QFI = False, site = 0, scalar_product = 1. ):
         """Calculates the lower bound on the QFI set by the LG correlator QFI > 8 LG_B_Max
-        using a "search a little after the first local maximum" algorithm """
+        using a "search a little after the first local maximum" algorithm"""
 
         extra_params = self.extra_params
         E0 = self.energy
-        start_time = extra_params.get('start_time' , 0)
 
         #Initialize model and phi through building the Q_MPO
         phi = self.apply_Q_MPO( op, op_sum = op_sum, site = site)
@@ -536,23 +618,31 @@ class State_Evo(MPS):
         
         # TEBD engine
         phi_t, engine = phi.TEBD_initialize()
+        start_time = engine.evolved_time
 
         #set up the maximum number of steps 
         t_max = extra_params.get('t_max', 5)
         N_steps = extra_params['N_steps']
         dt = extra_params['dt']
-        step_max = int(max(t_max/(N_steps * dt),1))
+        step_max = int(max((t_max - start_time)/(N_steps * dt ),1))
         
         LG_B_vals = []
         best_LG_B = -np.inf
         best_t = 0
         i = 0
         i_max = np.inf
+        local_max = -1.0 * np.inf
         check_after = extra_params.get('check_after', 5)
 
         times = [engine.evolved_time]
         expec_U = [scalar_product * np.real(phi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q(t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
-    
+
+        if start_time == 0:
+            C0 = expec_U[0]  
+        else:
+            phi = self.apply_Q_MPO( op, op_sum = op_sum, site = site)
+            C0 = scalar_product * np.real(phi.overlap(phi))
+
         while i < step_max:     #loop until the end
             #construct the time correlator list
             engine.run()
@@ -561,7 +651,7 @@ class State_Evo(MPS):
             times.append(t)
 
             while 2 *i <= len(expec_U)-1:    #when the correlator list is long enough calculate...
-                LG_B = 2* expec_U[i] - expec_U[2*i] - expec_U[0]
+                LG_B = 2* expec_U[i] - expec_U[2*i] #- C0 
                 LG_B_vals.append(LG_B)
                 
                 if LG_B > best_LG_B:    #keep track of the largest LG_B value
@@ -575,13 +665,13 @@ class State_Evo(MPS):
                         best_t = times[i]           #time
                         
                 if i_max + check_after < i:   #check after 'check_after' steps passed the local maximum
-                    if best_LG_B > local_max:   #if there is a better LG_B then reset
+                    if best_LG_B >= local_max:   #if there is a better LG_B then reset
                         i_max = np.inf
                     else:                       #if nothing beats it then return the last local maximum
-                        return best_t, 8 * local_max, qfi
+                        return best_t,   local_max #*  8, qfi 
                 i += 1
 
-        return best_t, 8 * local_max, qfi
+        return best_t, local_max # * 8, qfi
 
 
     def find_degeneracy(self, op = None, eps = 1e-9):
