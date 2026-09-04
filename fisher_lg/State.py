@@ -6,7 +6,7 @@ from tenpy.networks.mps import MPS
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain, AndersonImpurityModel_Bulk
+from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain
 
 
 class State_Evo(MPS):
@@ -16,9 +16,8 @@ class State_Evo(MPS):
 
     model_dict = {
         "Ising" : TFIsingChain, 
-        "Kondo" : KondoChain, 
-        "AIM" : AndersonImpurityModel, 
-        "AIM_B" : AndersonImpurityModel_Bulk}
+        "Kondo" : KondoChain,  
+        "AIM" : AndersonImpurityModel}
 
     def __init__(self,
                  sites,
@@ -83,8 +82,6 @@ class State_Evo(MPS):
                 't_max' : 3,  #only an option for calculating the maximum of the LG correlator
                 'check_after' : 5
             }
-
-        assert dmrg_params.get('N_times',2) %2 ==0
 
         #run dmrg
         if initial_state is None:
@@ -393,19 +390,22 @@ class State_Evo(MPS):
 
 
         
-    def apply_Q_MPO(self, op, op_sum = True, site = None, truncation_params = None):
+    def apply_Q_MPO(self, op, op_sum = True, site = None, new_chi_max = None):
+
         phi = self.copy()
         L = self.L
         model = self.model
         model_params = self.model_params
         extra_params = self.extra_params
         compression_method = extra_params.get('compression_method', 'SVD')
+        chi_max = new_chi_max if new_chi_max is not None else extra_params['trunc_params']['chi_max']
+
         if site is None:
             site = L//2
         if op_sum:
             mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
             mpo.apply(phi, options={'compression_method' : compression_method, 'trunc_params': {
-            'chi_max': 1500,
+            'chi_max': chi_max,
             'svd_min': 1e-9}})
         else:
             phi.apply_local_op(site, op)
@@ -417,17 +417,11 @@ class State_Evo(MPS):
         return  phi
     
 
-    def TEBD_initialize(self, model_params = None , dmrg_params = None):
+    def TEBD_initialize(self, tebd_params = None):
         """Initialize the TEBD engine with appropriate start time"""
 
-        if self.model != None:
-            model = self.model 
-        else:
-            model = self.get_model(model_params)
-        if self.extra_params != None:
-            extra_params = self.extra_params
-        else:
-            extra_params = self.get_extra_params(dmrg_params)
+        model = self.model
+        extra_params = self.extra_params if tebd_params is None else tebd_params
         
         dt = extra_params.get('dt', 0.05)
         start_time = extra_params.get('start_time',0)
@@ -442,14 +436,14 @@ class State_Evo(MPS):
         elif start_time > 0:
             initial_steps = int(start_time / dt)
             dt_prime = round(start_time/initial_steps, 4)
-            engine.calc_U(2, dt_prime )
+            engine.calc_U(order = 2, delta_t = dt_prime )
             engine.evolve(initial_steps,   dt = dt_prime)
-        engine.calc_U(2, dt )
+        engine.calc_U(order = 2, delta_t = dt )
 
         return phi_t, engine
 
 
-    def calculate_QtQ(self, op1, op2 = None, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1., verbose = False):
+    def calculate_QtQ(self, options ):
         """ Calculates 1/2 < psi | {Q1^dag(t), Q2} | psi > 
             It is important to note the hermitian conjugate Q1^dag(t). This means the result is always
             real even when Q is non-hermitian, e.g. when calculating Sx from Sp and Sm. 
@@ -457,16 +451,23 @@ class State_Evo(MPS):
             scalar_product multiplies the y-axis data to scale for easy conversion of the spin operators to 
             Pauli operators. 
               """
+        op1 = options['op1']
+        op2 = options.get('op2', None)
+        op_sum = options['op_sum']
+        site = options.get('site', 0)
+        calc_upto_2t = options.get('calc_upto_2t', False)
+        scalar_product = options.get('scalar_product', 1.)
+        verbose = options.get('verbose', False)
         
         extra_params = self.extra_params.copy()
         E0 = self.energy
         N_times = extra_params.get('N_times', 10)
-        M = self.model
+        assert N_times %2 ==0
 
         #DMRG engine
         # apply phi = Q1 |psi > Must be careful here because some processes
         # in MPS and MPO by default normalize the output wavefunction
-        phi = self.apply_Q_MPO( op1, op_sum = op_sum, site = site)
+        phi = self.apply_Q_MPO( op1, op_sum = op_sum, site = site, new_chi_max = options.get('phi_chi', None))
 
         if op2 is None: #xi = Q2 |psi >
             xi = phi
@@ -474,6 +475,10 @@ class State_Evo(MPS):
             xi = self.apply_Q_MPO( op2, op_sum = op_sum, site = site)
         
         # TEBD engine
+        phi_tebd_params = extra_params.copy()
+        phi_t_chi_max = options.get('phi_t_chi', None)
+        if phi_t_chi_max is not None:
+            phi_tebd_params['trunc_params']['chi_max'] = phi_t_chi_max
         phi_t, engine = phi.TEBD_initialize()
         start_time = engine.evolved_time
 
@@ -510,17 +515,27 @@ class State_Evo(MPS):
                 expec = scalar_product * np.real(xi.overlap(phi_t) * np.exp(1j * E0 * t))
                 times += [-100, round(t, 4)]
                 expec_U += [-100, expec] #so that if the implementation is wrong we will see it in the data
-            
+                if verbose != False:
+                    print(times, expec_U)
+
         return times, expec_U
 
 
-    def calculate_QQtQQ(self, ops_list, op_sum = True, site = 0, calc_upto_2t = False , scalar_product = 1.):
+    def calculate_QQtQQ(self, options):
         """ Calculates 1/2 < psi |Q4^dag Q3^dag(t) Q2 Q1 + Q1^dag Q2^dag Q3(t) Q4| psi >  
 
             ops : list of list of 4 operator strings - will sum the contributions from each list of operators
             scalar_product : float - multiplies the y-axis data to scale for easy conversion of the spin operators to 
             Pauli operators. 
                 """
+
+        ops_list = options['op1']
+        if isinstance(ops_list, str):
+            ops_list = [ops_list] * 4
+        op_sum = options['op_sum']
+        site = options.get('site', 0)
+        calc_upto_2t = options.get('calc_upto_2t', False)
+        scalar_product = options.get('scalar_product', 1.)
         
         extra_params = self.extra_params.copy()
         N_times = extra_params.get('N_times', 10)
@@ -575,14 +590,20 @@ class State_Evo(MPS):
                                        
         return times, expec_tot
     
-    def calculate_LG_correlator(self, op, op_sum = True , site = 0, scalar_product = 1., verbose = False , trichotomic = False):
+    def calculate_LG_correlator(self, options):
         """Returns  times, 2 [C(t) - C(0)] - [C(2t) - C(0)], 2C(t) - C(2t) """
-
+        op = options['op1']
+        op_sum = options['op_sum']
+        site = options.get('site', 0)
+        options['calc_upto_2t'] = True
+        scalar_product = options.get('scalar_product', 1.)
+        trichotomic = options.get('trichotomic', False)
+        
         #Calculates C values from 0 to time_end
         if trichotomic:
-            times, expec_U = self.calculate_QQtQQ(ops_list = op, op_sum = op_sum, calc_upto_2t  = True, site = site, scalar_product = scalar_product)    #Calculates only the extra C values needed to calculate K
+            times, expec_U = self.calculate_QQtQQ(options)    #Calculates only the extra C values needed to calculate K
         else:
-            times, expec_U = self.calculate_QtQ(op, op_sum = op_sum, calc_upto_2t  = True, site = site, scalar_product = scalar_product, verbose = verbose )    #Calculates only the extra C values needed to calculate K
+            times, expec_U = self.calculate_QtQ(options )    #Calculates only the extra C values needed to calculate K
 
         if self.model_params.get('start_time', 0) == 0:
             C0 = expec_U[0]  
@@ -601,9 +622,17 @@ class State_Evo(MPS):
         return times[: half_len] , LG_B_lst, K_lst 
 
 
-    def calculate_LG_bound(self, op, op_sum = True, return_QFI = False, site = 0, scalar_product = 1. ):
+    def calculate_LG_bound(self, options ):
         """Calculates the lower bound on the QFI set by the LG correlator QFI > 8 LG_B_Max
         using a "search a little after the first local maximum" algorithm"""
+
+        op = options['op1']
+        op_sum = options['op_sum']
+        site = options.get('site', 0)
+        options['calc_upto_2t'] = True
+        scalar_product = options.get('scalar_product', 1.)
+        verbose = options.get('verbose', False)
+        return_QFI = options.get('return_QFI', False)
 
         extra_params = self.extra_params
         E0 = self.energy
@@ -656,6 +685,8 @@ class State_Evo(MPS):
                 
                 if LG_B > best_LG_B:    #keep track of the largest LG_B value
                     best_LG_B = LG_B
+                    if verbose:
+                        print('Current peak value:', LG_B, " at time t =", t)
 
                     # detect first local maximum
                 if len(LG_B_vals) >= 3:
@@ -663,15 +694,21 @@ class State_Evo(MPS):
                         local_max = LG_B_vals[-2]   #LG_B
                         i_max = i                   #index
                         best_t = times[i]           #time
+                        if verbose:
+                            print('Local max found: ', local_max, ' at time t=' , best_t)
                         
                 if i_max + check_after < i:   #check after 'check_after' steps passed the local maximum
                     if best_LG_B >= local_max:   #if there is a better LG_B then reset
                         i_max = np.inf
                     else:                       #if nothing beats it then return the last local maximum
+                        if verbose:
+                            print('No local maxima found after t =', best_t, ', searched until t_f =', t, 'LG(t_f) =', LG_B) 
                         return best_t,   local_max #*  8, qfi 
                 i += 1
 
-        return best_t, local_max # * 8, qfi
+        if verbose:
+            print('Algorithm finished without finding global maximum past t = 0')       
+        return best_t, local_max , qfi
 
 
     def find_degeneracy(self, op = None, eps = 1e-9):

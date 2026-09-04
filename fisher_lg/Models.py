@@ -1,7 +1,7 @@
 import numpy as np
 
 from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
-from tenpy.models.lattice import Chain
+from tenpy.models.lattice import Chain, Kagome
 from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_charges, GroupedSite
 from tenpy.networks.mps import MPS
 
@@ -120,118 +120,183 @@ class KondoChain(KondoModel, NearestNeighborModel):
             psi = MPS.from_product_state(chain, state)
             return psi
 
-    
 
-class AndersonImpurityModel(CouplingMPOModel, NearestNeighborModel):
-    r"""1D single-site Anderson impurity model 
-    
-    Paramters:
+class AndersonImpurityModel(CouplingMPOModel):
+    r"""Single-site Anderson impurity in a 1D Lanczos chain or a Kagome bath.
 
-    model_params : dict
-
-    Hamiltonian:
-    $H = \sum_\sigma [ \sum_k 
-    {\epsillon_k n_{k, \sigma} 
-    + t (c^\dag _{k, \sigma}  c_{k + 1, \sigma} + c^\dag _{k, \sigma}  c_{k + 1, \sigma}  }
-    + V (c^\dag_{0, \sigma}  c_{imp, \sigma}   + c^\dag_{imp, \sigma}  c_{0, \sigma}  
-    + \mu n_{d, \sigma} ] 
-    + U n_{d, \uparrow} n_{d, \downarrow}  $
-    
+    model_params
+    ------------
+    lattice : 'Chain' | 'Kagome'
+    L               : chain length (Chain only; N_sites = L + 1)
+    Lx, Ly          : lattice dimensions (Kagome only)
+    bc_MPS, bc_x, bc_y
+    imp_pos         : lattice index [x, y, u] of the impurity (Kagome only)
+    t, mu, mu_d, U, V, h
     """
 
-    couplings = {'t': 'hopping',   #Lanczos off diagonals type: list, int
-                'mu' : 'conduction chemical potential',  #Lanczos diagonals type: list, int
-                'mu_d': 'impurity potential',    #on-site impurity potential
-                'U' : 'impurity Hubbard interaction',   #impurity Hubbard    
-                'V' : 'exchange coupling',      #impurity-bath hopping
-                'h' : 'Zeeman coupling'}  #breaks the SU(2) spin symmetry      
+    default_lattice = 'Chain'
+    force_default_lattice = False
 
-    def __init__(self, model_params):
-        super().__init__(model_params)
-        self.model_params = model_params
+    couplings = {'t': 'hopping',
+                 'mu': 'conduction chemical potential',
+                 'mu_d': 'impurity potential',
+                 'U': 'impurity Hubbard interaction',
+                 'V': 'exchange coupling',
+                 'h': 'Zeeman coupling'}
 
     def init_sites(self, model_params):
         conserve = model_params.get('conserve', 'N')
-        cons_Sz = model_params.get('cons_Sz', None)
-        return SpinHalfFermionSite(cons_N= conserve , cons_Sz= cons_Sz)
+        cons_Sz = model_params.get('cons_Sz', 'Sz')
+        return SpinHalfFermionSite(cons_N=conserve, cons_Sz=cons_Sz)
 
     def init_lattice(self, model_params):
-        L = model_params['L']
         site = self.init_sites(model_params)
-        return Chain(L + 1, site, bc='open')
+        name = model_params.get('lattice', self.default_lattice)
+        name = name if isinstance(name, str) else name.__name__
+        self.lattice_name = name
+
+        if name == 'Chain':
+            L = model_params['L']
+            return Chain(L + 1, site, bc='open', bc_MPS='finite')
+
+        elif name == 'Kagome':
+            Lx = model_params.get('Lx', 2)
+            Ly = model_params.get('Ly', 3)
+            bc_MPS = model_params.get('bc_MPS', 'finite')
+            bc_x = model_params.get('bc_x',
+                                    'open' if bc_MPS == 'finite' else 'periodic')
+            bc_y = model_params.get('bc_y', 'periodic')
+            order = model_params.get('order', 'default')
+            return Kagome(Lx, Ly, site, bc=[bc_x, bc_y],
+                          bc_MPS=bc_MPS, order=order)
+
+        raise ValueError(f"unsupported lattice {name!r}")
+
 
     def init_terms(self, model_params):
+        if self.lattice_name == 'Chain':
+            self._terms_chain(model_params)
+        else:
+            self._terms_lattice(model_params)
 
-        t = model_params['t']
-        mu = model_params.get('mu', 0)
-        U = model_params['U']
-        mu_d = model_params['mu_d']
-        V = model_params['V']
-        h = model_params.get('h', 0)
+    def _terms_chain(self, model_params):
+        t, U = model_params['t'], model_params['U']
+        mu_d, V = model_params['mu_d'], model_params['V']
+        mu = model_params.get('mu', 0.)
+        h = model_params.get('h', 0.)
         L = self.lat.N_sites
-        imp = 0    #location of impurity in Lanczos chain is the 0th element
-                   #note that this is hard coded in some places
+        imp = 0
 
-        # Hopping terms — use add_local_term so that coupling_term_handle_JW
-        # inserts the correct Jordan-Wigner string automatically.
-        # add_coupling_term is a low-level function that does NOT handle JW;
-        # using it for spinful fermions gives wrong signs in mixed-spin sectors.
-        # ------------------------------------------------------------------
         for i in range(L - 1):
-            j = i + 1
-            # Bond (0,1) hybridises the impurity to the chain via V.
-            # All other bonds are plain conduction hops with amplitude t.
             strength = V if i == imp else t
             for op_dag, op in (('Cdu', 'Cu'), ('Cdd', 'Cd')):
-                self.add_local_term(-strength,  [(op_dag, [i, 0]), (op, [j, 0])], plus_hc=True)
-                
-        if type(mu) in [float , int]:
-            mu = [float(mu)] * L
+                self.add_local_term(-strength,
+                                    [(op_dag, [i, 0]), (op, [i + 1, 0])],
+                                    plus_hc=True)
+
+        if np.isscalar(mu):
+            mu_list = [float(mu)] * (L - 1)
         else:
-            mu = list(mu) * (L // len(mu))
-        mu = [mu_d] + mu
+            mu = list(mu)
+            reps = -(-(L - 1) // len(mu))   
+            mu_list = (mu * reps)[:L - 1]
+        mu_list = [mu_d] + mu_list
 
-
-        # onsite potentials
         for i in range(L):
-            self.add_onsite_term(mu[i], i, 'Ntot')
-
-        # impurity Hubbard interaction
+            self.add_onsite_term(mu_list[i], i, 'Ntot')
+            if h != 0.:
+                self.add_onsite_term(-h, i, 'Sz')
         self.add_onsite_term(U, imp, 'NuNd')
 
-        # h: symmetry breaking Zeeman field
-        if h != 0:
-            # Sz Sz coupling
-            for i in range(L):
-                self.add_onsite_term(-1.0 * h, i, "Sz")
+    def _terms_lattice(self, model_params):
+        t, U = model_params['t'], model_params['U']
+        mu_d, V = model_params['mu_d'], model_params['V']
+        mu = model_params.get('mu', 0.)
+        h = model_params.get('h', 0.)
+        imp = tuple(model_params.get('imp_pos', [0, 0, 0]))
 
+        #uniform bath: add_coupling handles the JW strings
+        for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
+            for op_dag, op in (('Cdu', 'Cu'), ('Cdd', 'Cd')):
+                self.add_coupling(-t, u1, op_dag, u2, op, dx, plus_hc=True)
+
+        #bonds touching the impurity from t to V
+        # add_local_term, so the JW strings are inserted 
+        for i, j in self._impurity_bonds(imp):
+            for op_dag, op in (('Cdu', 'Cu'), ('Cdd', 'Cd')):
+                self.add_local_term(-(V - t),
+                                    [(op_dag, list(i)), (op, list(j))], plus_hc=True)
+
+        # onsite terms
+        for u in range(len(self.lat.unit_cell)):
+            self.add_onsite(mu, u, 'Ntot')
+            if h != 0.:
+                self.add_onsite(-h, u, 'Sz')
+
+        imp_mps = self.lat.lat2mps_idx(np.array(imp))
+        self.add_onsite_term(mu_d - np.mean(mu), imp_mps, 'Ntot')
+        self.add_onsite_term(U, imp_mps, 'NuNd')
+
+    def _impurity_bonds(self, imp):
+        """Lattice indices of all NN bonds with one end on the impurity."""
+        x0, y0, u0 = imp
+        Lx, Ly = self.lat.Ls
+        px, py = self.lat.boundary_conditions[:2]
+        bonds = []
+
+        def valid(x, y):
+            if px == 'periodic':
+                x %= Lx
+            elif not 0 <= x < Lx:
+                return None
+            if py == 'periodic':
+                y %= Ly
+            elif not 0 <= y < Ly:
+                return None
+            return x, y
+
+        for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
+            if u1 == u0:
+                p = valid(x0 + dx[0], y0 + dx[1])
+                if p is not None:
+                    bonds.append(((x0, y0, u0), (p[0], p[1], u2)))
+            if u2 == u0:
+                p = valid(x0 - dx[0], y0 - dx[1])
+                if p is not None:
+                    bonds.append(((p[0], p[1], u1), (x0, y0, u0)))
+        return bonds
 
     def _set_initial_state(self, target_Sz = None):
-        '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
-
-        L = len(self.lat.mps_sites())
-
-        if target_Sz is None:
-            target_Sz = 0
-
-        p_state = []
-        i = 0
-        t = 0
-        while i < L:
-            while t < target_Sz:
-                p_state.append('up') 
+            '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
+    
+            L = len(self.lat.mps_sites())
+    
+            if target_Sz is None:
+                target_Sz = 0
+    
+            p_state = []
+            i = 0
+            t = 0
+            while i < L:
+                while t < target_Sz:
+                    p_state.append('up') 
+                    i += 1
+                    t += 1
+                if i != L-1:
+                    p_state.append('down') 
+                else: 
+                    p_state.append('empty')
                 i += 1
-                t += 1
-            if i != L-1:
-                p_state.append('down') 
-            else: 
-                p_state.append('empty')
-            i += 1
-            if i != L:
-                p_state.append('up') 
-                i += 1
-        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-             
+                if i != L:
+                    p_state.append('up') 
+                    i += 1
+            return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+                 
+
+class AndersonImpurityChain(AndersonImpurityModel, NearestNeighborModel):
+    default_lattice = 'Chain'
+    force_default_lattice = True
+
 
 class AndersonImpurityModel_Bulk(CouplingMPOModel, NearestNeighborModel):
     r"""1D single-site Anderson impurity model with impurity located in the bulk
