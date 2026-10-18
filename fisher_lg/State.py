@@ -1,12 +1,12 @@
-import itertools
-
 import numpy as np
 
 from tenpy.networks.mps import MPS
 from tenpy.algorithms import dmrg, tebd
 from tenpy.networks.mpo import MPO
 
-from fisher_lg.Models import KondoChain, AndersonImpurityModel, TFIsingChain
+from fisher_lg.Models import plot_lattice
+from fisher_lg.Models import (KondoChain, KondoModel, AndersonImpurityModel,
+                               AndersonImpurityChain, TFIsingChain)
 
 
 class State_Evo(MPS):
@@ -16,8 +16,10 @@ class State_Evo(MPS):
 
     model_dict = {
         "Ising" : TFIsingChain, 
-        "Kondo" : KondoChain,  
-        "AIM" : AndersonImpurityModel}
+        "Kondo_Lattice" : KondoModel,  
+        "Kondo_Chain" : KondoChain,
+        "AIM_Lattice" : AndersonImpurityModel,
+        "AIM_Chain" : AndersonImpurityChain}
 
     def __init__(self,
                  sites,
@@ -324,7 +326,7 @@ class State_Evo(MPS):
             
 
 
-    def QFI(self, op, op_sum = True, site = None):
+    def QFI(self, op, op_sum = True, site = None, scalar_multiply = None ):
         """
         Calculate the Quantum Fisher Information (QFI) for a given state and operator.
         
@@ -333,6 +335,10 @@ class State_Evo(MPS):
             The matrix product state representing the quantum state.
         op : str
             The operator for which to calculate the QFI ('Sigmax' or 'Sigmaz').
+        op_sum : Bool 
+            if QFI should represent the sum of op on all sites
+        scalar_multiply :  list
+            factor which is multiplied to the jth value of op if summing over the MPS i.e. op_tot = sum_i op[i] scalar_multiply[i]
             
         Returns:
         float
@@ -340,22 +346,31 @@ class State_Evo(MPS):
         """
         
         if op_sum: 
+            if scalar_multiply is None:
+                scalar_multiply = np.ones(self.L, dtype = float)
             # Calculate the expectation value of the operator
-            expe = np.mean(self.expectation_value(op))
+            expe = np.sum(np.array(self.expectation_value(op)) * np.array(scalar_multiply) )
 
             # Calculate the correlation function
             corr_q2 = self.correlation_function(op, op, sites1=None, sites2=None)
+            corr_q2 =  [[corr_q2[i,j] * scalar_multiply[i] * scalar_multiply[j] for i in range(self.L)] for j in range(self.L)]
             # Calculate the expectation value of the squared operator
-            expectation_q2 = np.mean(corr_q2)
+            expectation_q2 = np.sum(corr_q2)
+
+            weight = 0
+            for i in scalar_multiply:
+                weight += np.abs(i)
+
         else:
-            op_site = self.L//2 if site is None else site
+            op_site = 0 if site is None else site
             expe = self.expectation_value(op)[op_site]
             expectation_q2 = self.correlation_function(op, op, sites1=[op_site], sites2=[op_site])
+            weight = 1.
         
-        # Calculate QFI using the formula: QFI = 4 * (expectation_q2 - expe^2)
-        qfi = 4 * (expectation_q2 - expe**2).flatten()[0]
+        # Calculate QFI using the formula: QFI = 4 * (<Q^2> - <Q>^2)
+        qfi = (1./weight) * 4 * (expectation_q2 - expe**2).flatten()[0]
         
-        return qfi
+        return  qfi
     
     def spin_spin_correlations(self, sites1 = None, sites2 = None):
         r'''Calculates spin-spin correlation function as an array < \\vec S_1 . \\vec S_2 >
@@ -387,6 +402,28 @@ class State_Evo(MPS):
             return list(SS.values())[0]
         else:
             return SS
+        
+    def integrated_spin_correlation(self, Sz_corr = False):
+        r'''returns the integrated spin correlation defined as
+        
+        Sigma(x) = 1 + \sum_i^x (< \vec S_i \cdot \vec S_d >)/(< \vec S_d \cdot \vec S_d >)
+
+        as an array of length L
+        '''
+        if self.model_params.get('lattice','Chain') != 'Chain':
+            ValueError("Method not implemented for lattices yet")
+
+
+        Sigma_x = [1.]
+        if Sz_corr:
+            S_corr = self.correlation_function('Sz', 'Sz', sites1= [0])[0]
+        else:
+            S_corr = self.spin_spin_correlations(sites1= [0])[0]
+
+        for i in range(1, len(S_corr)):
+            Sigma_x += [Sigma_x[i-1] + float(S_corr[i]/S_corr[0])]
+
+        return Sigma_x
 
 
         
@@ -401,13 +438,14 @@ class State_Evo(MPS):
         chi_max = new_chi_max if new_chi_max is not None else extra_params['trunc_params']['chi_max']
 
         if site is None:
-            site = L//2
+            site = 0
         if op_sum:
-            mpo = build_Q_MPO( op = op, op_sum = op_sum, model = model)
+            mpo = build_Q_MPO( op = op, sites = site, op_sum = op_sum, model = model)
             mpo.apply(phi, options={'compression_method' : compression_method, 'trunc_params': {
             'chi_max': chi_max,
             'svd_min': 1e-9}})
         else:
+            assert isinstance(site, int)
             phi.apply_local_op(site, op)
 
         phi = State_Evo.from_MPS(phi, model_params)
@@ -417,28 +455,48 @@ class State_Evo(MPS):
         return  phi
     
 
-    def TEBD_initialize(self, tebd_params = None):
-        """Initialize the TEBD engine with appropriate start time"""
+    def make_evolver(self, tebd_params = None):
+        """Initialize the evolution engine with appropriate start time. TEBD for NearestNeighborModel and TDVP 
+        for lattice models. Default TDVP option is 'tdvp2' but 'tdvp1' can be selected for in tebd_params using
+        'tdvp_method'"""
+        from tenpy.models.model import NearestNeighborModel
+        from tenpy.algorithms.tdvp import TwoSiteTDVPEngine, SingleSiteTDVPEngine
 
         model = self.model
-        extra_params = self.extra_params if tebd_params is None else tebd_params
-        
-        dt = extra_params.get('dt', 0.05)
-        start_time = extra_params.get('start_time',0)
+        if tebd_params is None:
+            tebd_params = self.extra_params
+        method = tebd_params.get('tdvp_method', 'tdvp2')
+
+        dt = tebd_params.get('dt', 0.05)
+        start_time = tebd_params.get('start_time',0)
 
         phi_t = self.copy()
-        engine = tebd.TEBDEngine(phi_t, model, extra_params)
-        engine.evolved_time = 0
+
+        if isinstance(model, NearestNeighborModel):
+            tebd_params['combine'] = True
+            engine = tebd.TEBDEngine(phi_t, model, tebd_params)
+            engine.evolved_time = 0
+            engine.calc_U(order = 2, delta_t = start_time)
+        elif method == 'tdvp2':
+            engine = TwoSiteTDVPEngine(phi_t, model, tebd_params)
+
+        elif method == 'tdvp1':
+            engine = SingleSiteTDVPEngine(phi_t, model, tebd_params)
+
+        else:
+            raise ValueError(method)
 
         if start_time > 0 and start_time < dt:
-            engine.calc_U(order = 2, delta_t = start_time)
             engine.evolve( N_steps = 1,  dt = start_time)
         elif start_time > 0:
             initial_steps = int(start_time / dt)
             dt_prime = round(start_time/initial_steps, 4)
-            engine.calc_U(order = 2, delta_t = dt_prime )
-            engine.evolve(initial_steps,   dt = dt_prime)
-        engine.calc_U(order = 2, delta_t = dt )
+            if isinstance(model, NearestNeighborModel):
+                engine.calc_U(order = 2, delta_t = dt_prime )
+            engine.evolve(N_steps = initial_steps,   dt = dt_prime)
+        if isinstance(model, NearestNeighborModel):
+            engine.calc_U(order = 2, delta_t = dt )
+        phi_t.canonical_form()
 
         return phi_t, engine
 
@@ -474,17 +532,17 @@ class State_Evo(MPS):
         else:
             xi = self.apply_Q_MPO( op2, op_sum = op_sum, site = site)
         
-        # TEBD engine
+        # evolution engine
         phi_tebd_params = extra_params.copy()
         phi_t_chi_max = options.get('phi_t_chi', None)
         if phi_t_chi_max is not None:
             phi_tebd_params['trunc_params']['chi_max'] = phi_t_chi_max
-        phi_t, engine = phi.TEBD_initialize()
+        phi_t, engine = phi.make_evolver()
         start_time = engine.evolved_time
 
         times = [engine.evolved_time]
         expec_U = [scalar_product * np.real(xi.overlap(phi_t)* np.exp(1j * E0 * start_time))]  # 1/2 <psi | {Q^dag (t), Q} | psi > = Re[< phi | U | phi > exp(i E_0 t)]
-
+        
         if verbose != False:
             print("times", "QtQ data")
             print(times, expec_U)
@@ -531,7 +589,7 @@ class State_Evo(MPS):
 
         ops_list = options['op1']
         if isinstance(ops_list, str):
-            ops_list = [ops_list] * 4
+            ops_list = [[ops_list] * 4]
         op_sum = options['op_sum']
         site = options.get('site', 0)
         calc_upto_2t = options.get('calc_upto_2t', False)
@@ -557,8 +615,8 @@ class State_Evo(MPS):
             phi4 = self.apply_Q_MPO( op4, op_sum = op_sum, site = site)
             
             # TEBD engines for first term
-            phi21_t, engine_21 = phi21.TEBD_initialize()
-            phi4_t, engine_4 = phi4.TEBD_initialize()
+            phi21_t, engine_21 = phi21.make_evolver()
+            phi4_t, engine_4 = phi4.make_evolver()
 
             #times = [engine_21.evolved_time]
             phi43_t = phi4_t.apply_Q_MPO(op3, op_sum = op_sum, site = site)
@@ -646,7 +704,7 @@ class State_Evo(MPS):
             qfi = self.QFI( op, op_sum = op_sum, site = site)
         
         # TEBD engine
-        phi_t, engine = phi.TEBD_initialize()
+        phi_t, engine = phi.make_evolver()
         start_time = engine.evolved_time
 
         #set up the maximum number of steps 
@@ -732,28 +790,16 @@ class State_Evo(MPS):
             
         return len(deg_list), deg_list, op_expe_list
 
-    def integrated_spin_correlation(self, Sz_corr = False):
-        r'''returns the integrated spin correlation defined as
-        
-        Sigma(x) = 1 + \sum_i^x (< \vec S_i \cdot \vec S_d >)/(< \vec S_d \cdot \vec S_d >)
+    def plot_lattice(self):
+        ''' Plots the finite lattice structure including MPS path. 
+        Prints array of nearest neighbor pairs.'''
 
-        as an array of length L
-        '''
-        Sigma_x = [1.]
-        if Sz_corr:
-            S_corr = self.correlation_function('Sz', 'Sz', sites1= [0])[0]
-        else:
-            S_corr = self.spin_spin_correlations(sites1= [0])[0]
-
-        for i in range(1, len(S_corr)):
-            Sigma_x += [Sigma_x[i-1] + float(S_corr[i]/S_corr[0])]
-
-        return Sigma_x
-
-        
+        return plot_lattice(self.model.lat)
 
 
-def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
+
+
+def build_Q_MPO( op = 'Sigmax', op_sum = True, sites = 0, model = None, model_params = {}):
     """
     builds an MPO corresponding to Q = 1/L sum_i op_i
     if apply_to_GS then it ftn will return op | GS > as a MPS
@@ -764,7 +810,15 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
             model = State_Evo.model_dict[model_type](model_params)
         except: 
             raise ValueError("Model type not configured yet")
+        
     L = model.lat.N_cells
+
+    if isinstance(sites, list):
+        assert op_sum == True 
+        for i in sites:
+            assert i < L
+    elif op_sum:
+        sites = range(L)
     bc = model_params.get('bc', 'finite')
     Id = model.lat.unit_cell[0].get_op("Id")
     if op not in model.lat.unit_cell[0].opnames:
@@ -777,11 +831,12 @@ def build_Q_MPO( op = 'Sigmax', op_sum = True, model = None, model_params = {}):
             Wi = np.empty((2, 2), dtype=object)
             Wi[0, 0] = Id
             Wi[1, 1] = Id
-            Wi[0, 1] = Q / L
+            Wi[0, 1] = Q  if i in sites else None
             Wi[1, 0] = None
         else:
+            assert isinstance(sites, int)
             Wi = np.empty((1, 1), dtype=object)
-            Wi[0, 0] = Q if i == L//2 else Id
+            Wi[0, 0] = Q if i == sites else Id
     
         W.append(Wi)
 

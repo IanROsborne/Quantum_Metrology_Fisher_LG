@@ -1,37 +1,39 @@
 import numpy as np
 
 from tenpy.models.model import CouplingMPOModel, NearestNeighborModel
-from tenpy.models.lattice import Chain, Kagome
+from tenpy.models.lattice import Chain, Kagome, Triangular, Square, Ladder
 from tenpy.networks.site import SpinHalfSite, SpinHalfFermionSite, set_common_charges, GroupedSite
 from tenpy.networks.mps import MPS
 
 
-__all__ = ['KondoModel', 'KondoChain', 'AndersonImpurityModel_Lanczos', 'AndersonImpurityModel', 'TFIsingChain']
+__all__ = ['KondoModel', 'KondoChain', 'AndersonImpurityModel', 'AndersonImpurityChain', 'TFIsingChain']
+
 
 
 class KondoModel(CouplingMPOModel):
     r"""1D Kondo lattice model with conduction electrons and localized spins.
-
-    Parameters:
-
-    model_params : dict 
-
-    Hamiltonian:    
-    H = -t \sum_{<ij>\sigma} c^\dagger_{i\sigma} c_{j\sigma} + h.c.
-         J_1 \sum_{i \sigma\sigma'} c^\dagger_{i\sigma} \vec{S}_{\sigma\sigma'} c_{i\sigma'} \cdot \vec{s}_i
-         J_2 \sum_{i} \vec{s}_i \cdot \vec{s}_{i+1}
-    """
+    
+        Parameters:
+    
+        model_params : dict 
+    
+        Hamiltonian:    
+        H = -t \sum_{<ij>\sigma} c^\dagger_{i\sigma} c_{j\sigma} + h.c.
+             J_1 \sum_{i \sigma\sigma'} c^\dagger_{i\sigma} \vec{S}_{\sigma\sigma'} c_{i\sigma'} \cdot \vec{s}_i
+             J_2 \sum_{i} \vec{s}_i \cdot \vec{s}_{i+1}
+        """
     couplings = {'t' : 'hopping',
-                'J_ii' : 'impurity-impurity Heisenberg coupling', 
-                'J_ei' : 'conduction-impurity Heisenberg coupling', 
-                'h' : 'symmetry-breaking Zeeman field'}
+                'Jii' : 'impurity-impurity Heisenberg coupling', 
+                'Jei' : 'conduction-impurity Heisenberg coupling', 
+                'h' : 'symmetry-breaking Zeeman field',
+                'gamma': 'd-wave control parameter',
+                'Jd' : 'd-wave Kondo interation'}
 
-    def __init__(self, model_params):
-        super().__init__(model_params)
-        self.model_params = model_params
+    default_lattice = Triangular
+    force_default_lattice = False
 
     def init_sites(self, model_params):
-        conserve = model_params.get('conserve', None)
+        conserve = model_params.get('cons_Sz', None)
         
         ferm_site = SpinHalfFermionSite(cons_N='N', cons_Sz= conserve )
         spin_site = SpinHalfSite(conserve= conserve)
@@ -40,31 +42,44 @@ class KondoModel(CouplingMPOModel):
         site = GroupedSite([ferm_site, spin_site], labels = ['e', 'i'] , charges = 'same')
         return site
 
-    
+    def init_lattice(self, model_params):
+
+        name = model_params.get('lattice', self.default_lattice)
+        name = name if isinstance(name, str) else name.__name__
+        model_params['lattice'] = name
+        site = self.init_sites(model_params)
+        self.lattice_name = name
+        
+        return determine_lattice_type(site, model_params)
+
+
     def init_terms(self, model_params):
         t = model_params.get('t', 1.0)
-        J1 = model_params.get('J_ei', 1.0)
-        J2 = model_params.get('J_ii', 0.5)
+        J1 = model_params.get('Jei', 1.0)
+        J2 = model_params.get('Jii', 0)
         h = model_params.get('h', 0)
+        gamma = model_params.get('gamma', 2.0)
+        Jd = model_params.get('Jd', 0)
 
         # Electron hopping
         for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
-            self.add_coupling(-1.0 * t, u1, 'Cdue', u2, 'Cue', dx, plus_hc=True)
-            self.add_coupling(-1.0 * t, u1, 'Cdde', u2, 'Cde', dx, plus_hc=True)
+            for op_dag, op in (('Cdue', 'Cue'), ('Cdde', 'Cde')):
+                self.add_coupling(-t, u1, op_dag, u2, op, dx, plus_hc=True)
+        
         # J1: Kondo coupling on each site
         # S_electron · s_impurity = S^z_e S^z_i + (S^+_e S^-_i + S^-_e S^+_i)/2
         for u in range(len(self.lat.unit_cell)):
             # Sz Sz coupling
-            self.add_onsite(4.0 * J1, u, "Szi Sze")
+            self.add_onsite(1.0 * J1, u, "Szi Sze")
             # S+ S- coupling
-            self.add_onsite(2.0 * J1, u, "Spi Sme", plus_hc = False)  
-            self.add_onsite(2.0 * J1, u, "Smi Spe", plus_hc = False)     
+            self.add_onsite(0.5 * J1, u, "Spi Sme", plus_hc = False)  
+            self.add_onsite(0.5 * J1, u, "Smi Spe", plus_hc = False)     
         
         # J2: Impurity-impurity Heisenberg coupling
         for u1, u2, dx in self.lat.pairs['nearest_neighbors']:
-            self.add_coupling(4.0 * J2, u1, 'Szi', u2, 'Szi', dx)
-            self.add_coupling(2.0 * J2, u1, 'Spi', u2, 'Smi', dx)
-            self.add_coupling(2.0 * J2, u1, 'Smi', u2, 'Spi', dx)
+            self.add_coupling(1.0 * J2, u1, 'Szi', u2, 'Szi', dx)
+            self.add_coupling(0.5 * J2, u1, 'Spi', u2, 'Smi', dx)
+            self.add_coupling(0.5 * J2, u1, 'Smi', u2, 'Spi', dx)
 
         # h: symmetry breaking Zeeman field
         if h != 0:
@@ -72,53 +87,66 @@ class KondoModel(CouplingMPOModel):
                 self.add_onsite(-1.0 * h, u, "Szi")
                 self.add_onsite(-1.0 * h, u, "Sze")
 
+        # Jd: d-channel Kondo interaction
+        if self.lattice_name == "Ladder":
+            L = model_params['L']
+            norm = 2 + gamma^2
+            for i in range(L):
+                for k in (0,1):
+                    X = [i, k]
+                    neighbors = []
+                    # find the neighbors and weights assuming open boundaries
+                    if i -1 >- 0:
+                        neighbors.append(([i-1, k], 1.0))
+                    if i + 1 < L:
+                        neighbors.append(([i -1, k], 1.0))
+                    neighbors.append(([i, 1 - k], -1.0 * gamma))
+                    # construct s_impurity \cdot d^\dag .(\sigma/2). d 
+                    # d = (c^dag_(i-1, k)+ c^dag_(i+1, k) - gamma c^dag_(i, 1 - k) )/sqrt{2 + gamma^2}
+                    for Y, w in neighbors:
+                        #diagonal
+                        self.add_local_term(Jd * w **2 / norm ,[('Szi', [X, 0 ]), ('Sze', [Y, 0])])
+                        self.add_local_term(0.5 * Jd * w **2 / norm , [('Spi', [X, 0 ]), ('Sme', [Y, 0])])
+                        self.add_local_term(0.5 * Jd * w **2 / norm ,[('Smi', [X, 0 ]), ('Spe', [Y, 0])])
+                    for a in range(len(neighbors)):
+                        for b in range(a+1, len(neighbors)):
+                            (m, wm), (n, wn) = neighbors[a], neighbors[b]
+                            #off-diagonal
+                            self.add_local_term(Jd * wm * wn /(2 * norm), [('Szi', X), ('Cdue', m), ('Cue', n)], plus_hc=True)
+                            self.add_local_term(-1.0 * Jd * wm * wn /(2 * norm), [('Szi', X), ('Cdde', m), ('Cde', n)], plus_hc=True)
+                            self.add_local_term(Jd * wm * wn /(2 * norm), [('Spi', X), ('Cdde', m), ('Cue', n)], plus_hc=True)
+                            self.add_local_term(Jd * wm * wn /(2 * norm), [('Smi', X), ('Cdue', m), ('Cde', n)], plus_hc=True)
+                        
 
-class KondoChain(KondoModel, NearestNeighborModel):
-    r"""The :class:`KondoModel` on a Chain, suitable for TEBD.
-
-    See the :class:`KondoModel` for the documentation of parameters.
-    """
-
-    default_lattice = Chain
-    #force_default_lattice = True
-
-    def init_lattice(self, model_params):
-        """Initialize a 1D lattice"""
-        L = model_params['L']
-        bc_MPS = model_params.get('bc', 'finite')
-        bc = 'periodic' if bc_MPS in ['infinite', 'segment'] else 'open'
-
-        site = self.init_sites(model_params= model_params)
-        lat = Chain(L, site, bc=bc, bc_MPS=bc_MPS)
-        
-        return lat
 
     def _set_initial_state(self, target_Sz = None):
-            """
-            Construct a half-filled product state with total Sz = target_Sz.
-            """
-            chain = self.lat.mps_sites()
-            L = len(chain)
-            if target_Sz is None:
-                target_Sz = L
-    
-            # reference state has total Sz = 0
-            state = ["up_e down_i"] * L
-            if target_Sz > 0:
-                if target_Sz > L:
-                    raise ValueError("Requested Sz = " + str(target_Sz) +" sector impossible.")
-    
-                for i in range(target_Sz):
-                    state[i] = "up_e up_i"
-    
-            elif target_Sz < 0:
-                if -target_Sz > L:
-                    raise ValueError("Requested Sz sector impossible.")
-    
-                for i in range(-target_Sz):
-                    state[i] = "down_e down_i"
-            psi = MPS.from_product_state(chain, state)
-            return psi
+        """Construct a half-filled product state with total Sz = target_Sz."""
+        chain = self.lat.mps_sites()
+        L = len(chain)
+        if target_Sz is None:
+            target_Sz = 0
+
+        # reference state has total Sz = 0
+        state = ["up_e down_i"] * L
+        if target_Sz > 0:
+            if target_Sz > L:
+                raise ValueError("Requested Sz = " + str(target_Sz) +" sector impossible.")
+
+            for i in range(target_Sz):
+                state[i] = "up_e up_i"
+
+        elif target_Sz < 0:
+            if -target_Sz > L:
+                raise ValueError("Requested Sz sector impossible.")
+
+            for i in range(-target_Sz):
+                state[i] = "down_e down_i"
+        psi = MPS.from_product_state(chain, state)
+        return psi
+
+class KondoChain(KondoModel, NearestNeighborModel):
+    default_lattice = 'Chain'
+    force_default_lattice = True
 
 
 class AndersonImpurityModel(CouplingMPOModel):
@@ -144,33 +172,23 @@ class AndersonImpurityModel(CouplingMPOModel):
                  'V': 'exchange coupling',
                  'h': 'Zeeman coupling'}
 
+    def __init__(self, model_params):
+        super().__init__(model_params)
+
     def init_sites(self, model_params):
-        conserve = model_params.get('conserve', 'N')
+        conserve = model_params.get('cons_N', 'N')
         cons_Sz = model_params.get('cons_Sz', 'Sz')
         return SpinHalfFermionSite(cons_N=conserve, cons_Sz=cons_Sz)
 
     def init_lattice(self, model_params):
-        site = self.init_sites(model_params)
+
         name = model_params.get('lattice', self.default_lattice)
         name = name if isinstance(name, str) else name.__name__
+        model_params['lattice'] = name
+        site = self.init_sites(model_params)
         self.lattice_name = name
-
-        if name == 'Chain':
-            L = model_params['L']
-            return Chain(L + 1, site, bc='open', bc_MPS='finite')
-
-        elif name == 'Kagome':
-            Lx = model_params.get('Lx', 2)
-            Ly = model_params.get('Ly', 3)
-            bc_MPS = model_params.get('bc_MPS', 'finite')
-            bc_x = model_params.get('bc_x',
-                                    'open' if bc_MPS == 'finite' else 'periodic')
-            bc_y = model_params.get('bc_y', 'periodic')
-            order = model_params.get('order', 'default')
-            return Kagome(Lx, Ly, site, bc=[bc_x, bc_y],
-                          bc_MPS=bc_MPS, order=order)
-
-        raise ValueError(f"unsupported lattice {name!r}")
+        
+        return determine_lattice_type(site, model_params)
 
 
     def init_terms(self, model_params):
@@ -267,30 +285,30 @@ class AndersonImpurityModel(CouplingMPOModel):
         return bonds
 
     def _set_initial_state(self, target_Sz = None):
-            '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
-    
-            L = len(self.lat.mps_sites())
-    
-            if target_Sz is None:
-                target_Sz = 0
-    
-            p_state = []
-            i = 0
-            t = 0
-            while i < L:
-                while t < target_Sz:
-                    p_state.append('up') 
-                    i += 1
-                    t += 1
-                if i != L-1:
-                    p_state.append('down') 
-                else: 
-                    p_state.append('empty')
+        '''Returns an initial state suitable for the AIM_L which is compatible with DMRG'''
+
+        L = len(self.lat.mps_sites())
+
+        if target_Sz is None:
+            target_Sz = 0
+
+        p_state = []
+        i = 0
+        t = 0
+        while i < L:
+            while t < target_Sz:
+                p_state.append('up') 
                 i += 1
-                if i != L:
-                    p_state.append('up') 
-                    i += 1
-            return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
+                t += 1
+            if i != L-1:
+                p_state.append('down') 
+            else: 
+                p_state.append('empty')
+            i += 1
+            if i != L:
+                p_state.append('up') 
+                i += 1
+        return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
                  
 
 class AndersonImpurityChain(AndersonImpurityModel, NearestNeighborModel):
@@ -500,4 +518,66 @@ class TFIsingChain(CouplingMPOModel, NearestNeighborModel):
                     p_state.append('up') 
                     i += 1
             return MPS.from_product_state(self.lat.mps_sites(), p_state, bc='finite')
-                
+
+
+def determine_lattice_type(site, model_params):
+
+    name = model_params['lattice']
+    if name == 'Chain':
+        L = model_params['L']
+        return Chain(L + 1, site, bc='open', bc_MPS='finite')
+
+    elif name == 'Kagome':
+        Lx = model_params['Lx']
+        Ly = model_params['Ly']
+        bc_MPS = model_params.get('bc_MPS', 'finite')
+        bc_x = model_params.get('bc_x',
+                                'open' if bc_MPS == 'finite' else 'periodic')
+        bc_y = model_params.get('bc_y', 'periodic')
+        order = model_params.get('order', 'default')
+        return Kagome(Lx, Ly, site, bc=[bc_x, bc_y],
+                        bc_MPS=bc_MPS, order=order)
+
+    elif name == 'Triangular':
+        Lx = model_params['Lx']
+        Ly = model_params['Ly']
+        bc_MPS = model_params.get('bc_MPS', 'finite')
+        bc_x = model_params.get('bc_x',
+                                'open' if bc_MPS == 'finite' else 'periodic')
+        bc_y = model_params.get('bc_y', 'periodic')
+        order = model_params.get('order', 'default')
+        return Triangular(Lx, Ly, site, bc=[bc_x, bc_y],
+                        bc_MPS=bc_MPS, order=order)
+
+    elif name == 'Square':
+        Lx = model_params['Lx']
+        Ly = model_params['Ly']
+        bc_MPS = model_params.get('bc_MPS', 'finite')
+        bc_x = model_params.get('bc_x',
+                                'open' if bc_MPS == 'finite' else 'periodic')
+        bc_y = model_params.get('bc_y', 'periodic')
+        order = model_params.get('order', 'default')
+        return Square(Lx, Ly, site, bc=[bc_x, bc_y],
+                        bc_MPS=bc_MPS, order=order)
+    elif name == 'Ladder':
+            Lx = model_params['L']
+            Ly = 2
+            bc_MPS = model_params.get('bc_MPS', 'finite')
+            bc_x = model_params.get('bc_x',
+                                    'open' if bc_MPS == 'finite' else 'periodic')
+            order = model_params.get('order', 'default')
+            return Ladder(Lx, site, bc=bc_x,
+                            bc_MPS=bc_MPS, order=order)
+
+    raise ValueError(f"unsupported lattice {name!r}")
+
+def plot_lattice(lat):
+    ''' Plots the finite lattice structure including MPS path. 
+    Prints array of nearest neighbor pairs.'''
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    lat.plot_sites(ax)
+    lat.plot_order(ax, linestyle=':')
+    lat.plot_coupling(ax, lat.pairs['nearest_neighbors'])
+    print("Nearest Neighbors: ", lat.pairs['nearest_neighbors'])

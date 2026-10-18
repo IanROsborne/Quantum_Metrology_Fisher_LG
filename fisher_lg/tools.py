@@ -107,7 +107,7 @@ def save_state(psi, filename):
     print(f"Saved DMRG state to {filename}")
  
  
-def load_state(filename):
+def load_state(filename, **kwargs):
     """
     Load a previously-saved DMRG ground state.
  
@@ -118,9 +118,6 @@ def load_state(filename):
         values, correlation functions, etc. `psi.model_params`,
         `psi.extra_params`, and `psi.energy` are attached as attributes,
         same as in your original code.
-    model_params : dict
-    extra_params : dict
-    energy : float
     """
     with open(filename, "rb") as f:
         data = pickle.load(f)
@@ -138,6 +135,8 @@ def load_state(filename):
         psi.unit_cell_width = data["unit_cell_width"]
  
     model_params = data["model_params"]
+    for key in kwargs:
+        model_params[key] = kwargs[key]
     extra_params = data["extra_params"]
     energy = data["energy"]
 
